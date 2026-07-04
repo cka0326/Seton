@@ -10,6 +10,7 @@ import {
   applyEdgeChanges,
   addEdge,
   useReactFlow,
+  useStoreApi,
   MarkerType,
   ConnectionMode,
 } from '@xyflow/react';
@@ -64,6 +65,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
   const [saveState, setSaveState] = useState('saved'); // saved | dirty | saving | error
   const [snapMsg, setSnapMsg] = useState('');
   const rf = useReactFlow();
+  const store = useStoreApi();
   const filterRef = useRef(null);
 
   // refs so the global key handler reads current selection without re-binding
@@ -139,7 +141,11 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
     []
   );
 
+  // React Flow v12 reports edge selection through onSelectionChange (not through
+  // onEdgesChange), so this is the single source of truth for what's selected.
+  const selectedRef = useRef({ nodes: [], edges: [] });
   const onSelectionChange = useCallback(({ nodes: sn, edges: se }) => {
+    selectedRef.current = { nodes: sn.map((n) => n.id), edges: se.map((e) => e.id) };
     setSelNodeId(sn[0]?.id || null);
     setSelEdgeId(se[0]?.id || null);
   }, []);
@@ -195,13 +201,27 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
   );
 
   const deselectAll = useCallback(() => {
+    // A focused node re-selects itself, so blur it before clearing selection.
+    const active = document.activeElement;
+    if (
+      active &&
+      active.blur &&
+      (active.classList?.contains('react-flow__node') ||
+        active.classList?.contains('react-flow__edge'))
+    ) {
+      active.blur();
+    }
+    // clear the store (edge selection lives only there) …
+    store.getState().unselectNodesAndEdges();
+    // … and our controlled node/edge state, which would otherwise re-select
     setNodes((ns) =>
       ns.some((n) => n.selected) ? ns.map((n) => ({ ...n, selected: false })) : ns
     );
     setEdges((es) =>
       es.some((e) => e.selected) ? es.map((e) => ({ ...e, selected: false })) : es
     );
-  }, []);
+    selectedRef.current = { nodes: [], edges: [] };
+  }, [store]);
 
   // keyboard shortcuts (deletion is handled by React Flow's deleteKeyCode)
   useEffect(() => {
@@ -215,9 +235,31 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
           el.blur();
         } else if (!maxNodeIdRef.current) {
           // let the maximized-note modal handle its own Escape
+          e.stopPropagation(); // stop React Flow from re-selecting the focused node
           if (filter) setFilter('');
           deselectAll();
         }
+        return;
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (typing) return; // let the field handle its own backspace
+        const selNodes = new Set(selectedRef.current.nodes);
+        const selEdges = new Set(selectedRef.current.edges);
+        if (!selNodes.size && !selEdges.size) return;
+        e.preventDefault();
+        if (selNodes.size) {
+          setNodes((ns) => ns.filter((n) => !selNodes.has(n.id)));
+        }
+        setEdges((es) =>
+          es.filter(
+            (ed) =>
+              !selEdges.has(ed.id) &&
+              !selNodes.has(ed.source) &&
+              !selNodes.has(ed.target)
+          )
+        );
+        selectedRef.current = { nodes: [], edges: [] };
         return;
       }
 
@@ -235,8 +277,10 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
         if (selNodeIdRef.current) setMaxNodeId(selNodeIdRef.current);
       }
     };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    // capture phase: intercept Delete/Backspace before React Flow's focusable
+    // edge/node accessibility handler consumes the event
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [addNote, deselectAll, filter]);
 
   // focus a node requested from search results
@@ -386,7 +430,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
           onPaneClick={onPaneClick}
           connectionMode={ConnectionMode.Loose}
           zoomOnDoubleClick={false}
-          deleteKeyCode={['Backspace', 'Delete']}
+          deleteKeyCode={null}
           multiSelectionKeyCode={['Meta', 'Shift']}
           fitView
           minZoom={0.05}

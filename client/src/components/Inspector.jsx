@@ -33,7 +33,6 @@ export default function Inspector({
             value={edge.data?.label || ''}
             placeholder="e.g. causes, contrasts with…"
             onChange={(e) => onChangeData({ label: e.target.value })}
-            autoFocus
           />
         </Field>
         <button className="danger" onClick={onDelete}>Delete edge</button>
