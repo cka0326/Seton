@@ -3,10 +3,11 @@
 Learn, revise and retain — on an infinite canvas.
 
 Seton is a local-first learning tool: an unlimited canvas of connected
-markdown notes (Obsidian-canvas style), with spaced-repetition flashcards,
-active-recall mode, full-text search and git-backed version history built in.
-It runs entirely on your machine today; the server/client split means it can
-move to the cloud later without rearchitecting.
+markdown notes (Obsidian-canvas style), with active-recall mode, auto-layout,
+light/dark themes and full-text search. Notes are stored on disk as plain
+JSON + Markdown files. It runs entirely on your machine today; the
+server/client split means it can move to the cloud later without
+rearchitecting.
 
 ## Quick start
 
@@ -27,22 +28,28 @@ npm start          # open http://localhost:4517
 **Canvas & notes**
 - Unlimited pan/zoom canvas per project, multiple canvases per project.
 - Notes are markdown (GFM: tables, task lists, code blocks…), rendered live.
+- **Double-click a note to open the full-screen editor** — it opens in edit
+  mode with a live split preview and every control in one place: title,
+  markdown body, kind, color, font size, text alignment, width/height, tags,
+  delete. (Single-click just selects; there's no separate side panel to
+  manage.)
 - Per-note styling: color, font size, text alignment, width/height (drag the
-  corners of a selected note or type exact dimensions).
+  corners of a selected note, or set exact values in the editor).
 - Note kinds — 📝 note, ❓ question, 📖 definition, 💡 idea, 🔗 resource —
   each with its own default color.
 - Tags on every note.
 - Edges carry short one-line labels (“causes”, “contrasts with”…).
-- Long notes: the inspector shows the full text, and **double-clicking a note
-  maximizes it to the whole viewport** with a distraction-free editor.
+- **Auto-layout**: one click arranges the notes into a clean hierarchy from
+  their connections (top-down or left-to-right), powered by dagre.
+- **Light and dark themes**, toggled from the sidebar (or the home screen) and
+  remembered between sessions.
 - Double-click empty canvas to drop a note there. Keyboard: `n` new note,
-  `/` filter, `r` recall mode, `Backspace` delete selection.
+  `e` / double-click edit, `⌘/Ctrl+D` duplicate selection, `Del` delete,
+  `Esc` deselect, `/` filter, `r` recall mode, `⌘/Ctrl+F` search.
+- Drag from any side of a note to any side of another to connect them; the
+  arrow follows your drag direction.
 
-**Learning tools**
-- 🎴 **Flashcards**: tick “Flashcard” on any note — the title becomes the
-  prompt, the content the answer. Reviews are scheduled with an SM-2-style
-  spaced-repetition algorithm (Again / Hard / Good / Easy, keys 1–4).
-  The sidebar badge shows how many cards are due across the project.
+**Revise & retain**
 - 🧠 **Recall mode**: blurs every note body so you can quiz yourself from the
   titles; click a note to reveal it.
 - Canvas filter dims non-matching notes so matches pop out visually.
@@ -52,25 +59,18 @@ npm start          # open http://localhost:4517
   with a one-click scope toggle for the current canvas. Clicking a result
   jumps to and centers the note — even across canvases.
 
-**Version control (git)**
-- Every project is its own git repository under `data/<project>/`.
-- Alongside the canonical JSON, Seton writes a generated markdown mirror of
-  each canvas, so `git diff` stays human-readable.
-- Snapshot from the toolbar or the History panel (with a message), browse the
-  full commit log, and restore any canvas to any snapshot — the pre-restore
-  state is committed first, so nothing is ever lost.
-- Review sessions auto-commit, giving you a learning trail in `git log`.
-
-**Import / export**
-- Whole project as JSON (re-importable) or as a single markdown document.
-- Individual canvases as JSON or markdown.
+**Storage**
+- Notes are saved to disk automatically as plain files: canonical JSON plus a
+  human-readable Markdown mirror of each canvas.
+- Whole project exports as JSON (re-importable) or as a single Markdown
+  document; individual canvases export as JSON or Markdown too.
 
 ## Layout
 
 ```
-server/   Express API — projects, canvases, search, export, git (simple-git)
-client/   React + Vite + React Flow (@xyflow/react) + react-markdown
-data/     Your projects (gitignored here; each project is its own git repo)
+server/   Express API — projects, canvases, search, export (files on disk)
+client/   React + Vite + React Flow (@xyflow/react) + react-markdown + dagre
+data/     Your projects (gitignored here)
 ```
 
 Point `SETON_DATA_DIR` somewhere else (e.g. a synced folder) to relocate your
@@ -80,11 +80,10 @@ notes. `PORT` overrides the server port.
 
 - `data/<pid>/project.json` — project metadata
 - `data/<pid>/canvases/<cid>.json` — nodes (notes) + edges, the source of truth
-- `data/<pid>/markdown/<cid>.md` — generated markdown mirror for readable diffs
+- `data/<pid>/markdown/<cid>.md` — generated Markdown mirror
 
 ## Roadmap ideas
 
-- Cloze deletions inside a note (`{{hidden}}`) as extra flashcards
 - Backlink panel and orphan-note detector
 - Node grouping / frames, canvas templates
 - Push project repos to a remote (GitHub) for sync

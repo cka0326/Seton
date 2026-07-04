@@ -4,7 +4,6 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { simpleGit } from 'simple-git';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -66,11 +65,7 @@ async function listCanvases(pid) {
   return docs;
 }
 
-function gitFor(pid) {
-  return simpleGit({ baseDir: projDir(pid) });
-}
-
-// ---------- markdown generation (kept in git for readable diffs) ----------
+// ---------- markdown generation (readable mirror of each canvas) ----------
 
 function canvasToMarkdown(canvas) {
   const lines = [`# ${canvas.name || 'Untitled canvas'}`, ''];
@@ -81,7 +76,6 @@ function canvasToMarkdown(canvas) {
     const meta = [];
     if (d.kind && d.kind !== 'note') meta.push(`kind: ${d.kind}`);
     if (d.tags && d.tags.length) meta.push(`tags: ${d.tags.join(', ')}`);
-    if (d.flashcard) meta.push('flashcard');
     if (meta.length) lines.push(`*${meta.join(' · ')}*`);
     lines.push('');
     if (d.content) lines.push(d.content, '');
@@ -163,13 +157,6 @@ app.post('/api/projects', wrap(async (req, res) => {
   };
   await writeJSON(canvasFile(id, canvas.id), canvas);
   await fs.writeFile(markdownFile(id, canvas.id), canvasToMarkdown(canvas), 'utf8');
-
-  const git = gitFor(id);
-  await git.init();
-  await git.addConfig('user.name', 'Seton', false, 'local');
-  await git.addConfig('user.email', 'seton@local', false, 'local');
-  await git.add('-A');
-  await git.commit(`Create project "${name}"`);
 
   res.status(201).json(project);
 }));
@@ -352,85 +339,7 @@ app.post('/api/projects/import', wrap(async (req, res) => {
     await writeJSON(canvasFile(id, assertId(c.id, 'canvas id')), c);
     await fs.writeFile(markdownFile(id, c.id), canvasToMarkdown(c), 'utf8');
   }
-  const git = gitFor(id);
-  await git.init();
-  await git.addConfig('user.name', 'Seton', false, 'local');
-  await git.addConfig('user.email', 'seton@local', false, 'local');
-  await git.add('-A');
-  await git.commit(`Import project "${project.name}"`);
   res.status(201).json(project);
-}));
-
-// ---------- git ----------
-
-const REV_RE = /^[0-9a-f]{4,40}$/i;
-
-app.get('/api/projects/:pid/git/log', wrap(async (req, res) => {
-  await loadProject(req.params.pid);
-  const log = await gitFor(req.params.pid).log({ maxCount: 100 });
-  res.json(log.all.map((c) => ({
-    hash: c.hash,
-    shortHash: c.hash.slice(0, 7),
-    date: c.date,
-    message: c.message,
-  })));
-}));
-
-app.get('/api/projects/:pid/git/status', wrap(async (req, res) => {
-  await loadProject(req.params.pid);
-  const status = await gitFor(req.params.pid).status();
-  res.json({
-    dirty: !status.isClean(),
-    changed: status.files.map((f) => f.path),
-  });
-}));
-
-app.post('/api/projects/:pid/git/commit', wrap(async (req, res) => {
-  await loadProject(req.params.pid);
-  const git = gitFor(req.params.pid);
-  const status = await git.status();
-  if (status.isClean()) return res.json({ committed: false, reason: 'nothing to commit' });
-  const message = (req.body.message || '').trim() ||
-    `Snapshot ${new Date().toLocaleString()}`;
-  await git.add('-A');
-  const result = await git.commit(message);
-  res.json({ committed: true, hash: result.commit, message });
-}));
-
-app.get('/api/projects/:pid/git/canvas/:cid', wrap(async (req, res) => {
-  const rev = (req.query.rev || '').toString();
-  if (!REV_RE.test(rev)) {
-    const err = new Error('invalid rev');
-    err.status = 400;
-    throw err;
-  }
-  assertId(req.params.cid, 'canvas id');
-  await loadProject(req.params.pid);
-  try {
-    const content = await gitFor(req.params.pid)
-      .show([`${rev}:canvases/${req.params.cid}.json`]);
-    res.json({ exists: true, canvas: JSON.parse(content) });
-  } catch {
-    res.json({ exists: false });
-  }
-}));
-
-app.post('/api/projects/:pid/git/restore', wrap(async (req, res) => {
-  const { cid, rev } = req.body;
-  assertId(cid, 'canvas id');
-  if (!REV_RE.test(rev || '')) {
-    const err = new Error('invalid rev');
-    err.status = 400;
-    throw err;
-  }
-  await loadProject(req.params.pid);
-  const git = gitFor(req.params.pid);
-  const content = await git.show([`${rev}:canvases/${cid}.json`]);
-  const doc = JSON.parse(content);
-  await saveCanvas(req.params.pid, doc);
-  await git.add('-A');
-  await git.commit(`Restore canvas "${doc.name}" to ${rev.slice(0, 7)}`);
-  res.json({ ok: true, canvas: doc });
 }));
 
 // ---------- static client (production / cloud) ----------

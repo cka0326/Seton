@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
-import { isDue } from '../srs.js';
 import CanvasBoard from './CanvasBoard.jsx';
 import SearchPanel from './SearchPanel.jsx';
-import GitPanel from './GitPanel.jsx';
-import ReviewMode from './ReviewMode.jsx';
+import ThemeToggle from './ThemeToggle.jsx';
 
-export default function ProjectView({ projectId, onClose, onMissing }) {
+export default function ProjectView({ projectId, theme, onToggleTheme, onClose, onMissing }) {
   const [project, setProject] = useState(null);
   const [activeCid, setActiveCid] = useState(null);
   const [doc, setDoc] = useState(null);
   const [loadStamp, setLoadStamp] = useState(0);
-  const [panel, setPanel] = useState(null); // 'search' | 'git' | null
-  const [reviewing, setReviewing] = useState(false);
+  const [panel, setPanel] = useState(null); // 'search' | null
   const [stats, setStats] = useState(null);
   const [focusReq, setFocusReq] = useState(null); // {canvasId, nodeId, ts}
 
@@ -30,18 +27,14 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
   const refreshStats = useCallback(async () => {
     try {
       const { canvases } = await api.getAll(projectId);
-      let notes = 0, words = 0, cards = 0, due = 0;
+      let notes = 0, words = 0;
       for (const c of canvases) {
         for (const n of c.nodes || []) {
           notes += 1;
           words += (n.data?.content || '').split(/\s+/).filter(Boolean).length;
-          if (n.data?.flashcard) {
-            cards += 1;
-            if (isDue(n.data.srs)) due += 1;
-          }
         }
       }
-      setStats({ notes, words, cards, due });
+      setStats({ notes, words });
     } catch { /* non-fatal */ }
   }, [projectId]);
 
@@ -108,25 +101,10 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
     if (canvasId !== activeCid) setActiveCid(canvasId);
   };
 
-  const onRestored = (restoredDoc) => {
-    refreshMeta();
-    if (restoredDoc.id === activeCid) setLoadStamp((s) => s + 1);
-  };
-
-  const closeReview = (reviewed) => {
-    setReviewing(false);
-    if (reviewed > 0) {
-      setLoadStamp((s) => s + 1); // reload canvas: srs data changed on disk
-      api.gitCommit(projectId, `Review session: ${reviewed} card(s)`).catch(() => {});
-    }
-    refreshStats();
-  };
-
-  // Esc closes an open side panel (Search / History); Cmd/Ctrl+F opens Search.
-  // The canvas board and the review overlay handle their own Escape.
+  // Esc closes the open Search panel; Cmd/Ctrl+F toggles it.
+  // The canvas board handles its own Escape.
   useEffect(() => {
     const onKey = (e) => {
-      if (reviewing) return;
       const el = e.target;
       const typing =
         el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
@@ -139,7 +117,7 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [panel, reviewing]);
+  }, [panel]);
 
   if (!project) return <div className="loading">Loading project…</div>;
 
@@ -147,7 +125,10 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
     <div className="workspace">
       <aside className="sidebar">
         <div className="sidebar-top">
-          <button className="ghost small" onClick={onClose}>← Projects</button>
+          <div className="sidebar-top-row">
+            <button className="ghost small" onClick={onClose}>← Projects</button>
+            <ThemeToggle theme={theme} onToggle={onToggleTheme} className="small" />
+          </div>
           <h2 className="project-name" onClick={renameProject} title="Click to rename">
             {project.name}
           </h2>
@@ -191,16 +172,6 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
           >
             🔍 Search
           </button>
-          <button className="side-btn" onClick={() => { setReviewing(true); }}>
-            🎴 Review
-            {stats && stats.due > 0 && <span className="badge">{stats.due}</span>}
-          </button>
-          <button
-            className={`side-btn ${panel === 'git' ? 'active' : ''}`}
-            onClick={() => setPanel(panel === 'git' ? null : 'git')}
-          >
-            🕘 History
-          </button>
         </div>
 
         <div className="sidebar-section">
@@ -216,18 +187,10 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
         </div>
 
         <div className="sidebar-foot">
-          {stats && (
-            <>
-              <div>{stats.notes} notes · {stats.words} words</div>
-              <div>
-                {stats.cards} flashcards
-                {stats.cards > 0 && <> · <strong>{stats.due} due</strong></>}
-              </div>
-            </>
-          )}
+          {stats && <div>{stats.notes} notes · {stats.words} words</div>}
           <div className="muted tiny-text">
-            n new · e/dbl-click expand · Del delete · Esc deselect · / filter ·
-            r recall · ⌘F search · drag handle→handle to link
+            n new · dbl-click/e edit · ⌘D duplicate · Del delete · Esc deselect ·
+            / filter · r recall · ⌘F search · Arrange auto-layout
           </div>
         </div>
       </aside>
@@ -237,14 +200,6 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
           projectId={projectId}
           activeCanvasId={activeCid}
           onJump={jumpTo}
-          onClose={() => setPanel(null)}
-        />
-      )}
-      {panel === 'git' && (
-        <GitPanel
-          projectId={projectId}
-          activeCanvasId={activeCid}
-          onRestored={onRestored}
           onClose={() => setPanel(null)}
         />
       )}
@@ -262,13 +217,12 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
                 : null
             }
             onFocusHandled={() => setFocusReq(null)}
+            theme={theme}
           />
         ) : (
           <div className="loading">Loading canvas…</div>
         )}
       </main>
-
-      {reviewing && <ReviewMode projectId={projectId} onClose={closeReview} />}
     </div>
   );
 }

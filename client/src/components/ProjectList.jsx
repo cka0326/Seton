@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
+import ThemeToggle from './ThemeToggle.jsx';
 
-export default function ProjectList({ onOpen }) {
+export default function ProjectList({ onOpen, theme, onToggleTheme }) {
   const [projects, setProjects] = useState(null);
   const [name, setName] = useState('');
   const [error, setError] = useState('');
@@ -44,7 +45,10 @@ export default function ProjectList({ onOpen }) {
   return (
     <div className="home">
       <div className="home-inner">
-        <h1 className="logo">Seton</h1>
+        <div className="home-top">
+          <h1 className="logo">Seton</h1>
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+        </div>
         <p className="tagline">Learn, revise and retain — on an infinite canvas.</p>
         {error && <div className="error">{error}</div>}
 

@@ -41,19 +41,4 @@ export const api = {
 
   search: (pid, q) =>
     req(`/api/projects/${pid}/search?q=${encodeURIComponent(q)}`),
-
-  gitLog: (pid) => req(`/api/projects/${pid}/git/log`),
-  gitStatus: (pid) => req(`/api/projects/${pid}/git/status`),
-  gitCommit: (pid, message) =>
-    req(`/api/projects/${pid}/git/commit`, {
-      method: 'POST',
-      body: JSON.stringify({ message }),
-    }),
-  gitCanvasAt: (pid, cid, rev) =>
-    req(`/api/projects/${pid}/git/canvas/${cid}?rev=${rev}`),
-  gitRestore: (pid, cid, rev) =>
-    req(`/api/projects/${pid}/git/restore`, {
-      method: 'POST',
-      body: JSON.stringify({ cid, rev }),
-    }),
 };

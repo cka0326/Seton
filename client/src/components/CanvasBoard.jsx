@@ -14,6 +14,7 @@ import {
   MarkerType,
   ConnectionMode,
 } from '@xyflow/react';
+import dagre from '@dagrejs/dagre';
 import NoteNode from './NoteNode.jsx';
 import NoteEdge from './NoteEdge.jsx';
 import Inspector from './Inspector.jsx';
@@ -54,7 +55,30 @@ function nodeMatches(node, q) {
     .includes(q);
 }
 
-function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
+// Hierarchical auto-layout using dagre. Returns nodes with new positions.
+function layoutNodes(nodes, edges, direction = 'TB') {
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: direction, nodesep: 55, ranksep: 90, marginx: 40, marginy: 40 });
+  g.setDefaultEdgeLabel(() => ({}));
+  for (const n of nodes) {
+    g.setNode(n.id, {
+      width: n.width || n.measured?.width || DEFAULT_NODE.width,
+      height: n.height || n.measured?.height || DEFAULT_NODE.height,
+    });
+  }
+  for (const e of edges) {
+    if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target);
+  }
+  dagre.layout(g);
+  return nodes.map((n) => {
+    const p = g.node(n.id);
+    const w = n.width || n.measured?.width || DEFAULT_NODE.width;
+    const h = n.height || n.measured?.height || DEFAULT_NODE.height;
+    return { ...n, position: { x: p.x - w / 2, y: p.y - h / 2 } };
+  });
+}
+
+function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme }) {
   const [nodes, setNodes] = useState(doc.nodes || []);
   const [edges, setEdges] = useState(doc.edges || []);
   const [selNodeId, setSelNodeId] = useState(null);
@@ -63,7 +87,6 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
   const [recall, setRecall] = useState(false);
   const [filter, setFilter] = useState('');
   const [saveState, setSaveState] = useState('saved'); // saved | dirty | saving | error
-  const [snapMsg, setSnapMsg] = useState('');
   const rf = useReactFlow();
   const store = useStoreApi();
   const filterRef = useRef(null);
@@ -167,7 +190,6 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
         fontSize: DEFAULT_NODE.fontSize,
         textAlign: DEFAULT_NODE.textAlign,
         tags: [],
-        flashcard: false,
       },
     };
     setNodes((ns) => ns.map((n) => ({ ...n, selected: false })).concat(node));
@@ -198,6 +220,35 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
       }
     },
     [rf, addNoteAt]
+  );
+
+  // Duplicate the selected note(s) with a small offset (Ctrl/Cmd+D)
+  const duplicateSelection = useCallback(() => {
+    const ids = new Set(selectedRef.current.nodes);
+    if (!ids.size) return;
+    setNodes((ns) => {
+      const copies = ns
+        .filter((n) => ids.has(n.id))
+        .map((n) => ({
+          ...n,
+          id: newId('n'),
+          position: { x: n.position.x + 36, y: n.position.y + 36 },
+          selected: true,
+          data: { ...n.data, tags: [...(n.data?.tags || [])] },
+        }));
+      if (!copies.length) return ns;
+      return ns.map((n) => ({ ...n, selected: false })).concat(copies);
+    });
+  }, []);
+
+  const autoLayout = useCallback(
+    (direction = 'TB') => {
+      setNodes((ns) => layoutNodes(ns, latest.current.edges, direction));
+      requestAnimationFrame(() =>
+        rf.fitView({ padding: 0.2, duration: 500 })
+      );
+    },
+    [rf]
   );
 
   const deselectAll = useCallback(() => {
@@ -263,6 +314,13 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
         return;
       }
 
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'd' || e.key === 'D')) {
+        if (typing) return;
+        e.preventDefault(); // don't trigger the browser bookmark dialog
+        if (selectedRef.current.nodes.length) duplicateSelection();
+        return;
+      }
+
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (e.key === 'n') {
@@ -281,7 +339,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
     // edge/node accessibility handler consumes the event
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [addNote, deselectAll, filter]);
+  }, [addNote, deselectAll, duplicateSelection, filter]);
 
   // focus a node requested from search results
   useEffect(() => {
@@ -329,16 +387,6 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
     setEdges((es) => es.filter((e) => e.id !== id));
   }, []);
 
-  const snapshot = useCallback(async () => {
-    if (latest.current.dirty) await persist();
-    const r = await api.gitCommit(
-      projectId,
-      `Snapshot: ${latest.current.name}`
-    );
-    setSnapMsg(r.committed ? `✓ ${r.hash?.slice(0, 7) || 'committed'}` : '✓ up to date');
-    setTimeout(() => setSnapMsg(''), 2500);
-  }, [projectId, persist]);
-
   const q = filter.trim().toLowerCase();
   const displayNodes = useMemo(() => {
     if (!q) return nodes;
@@ -376,6 +424,21 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
               {v.icon}<span className="btn-label"> {v.label}</span>
             </button>
           ))}
+          <span className="tb-sep" />
+          <button
+            className="ghost"
+            onClick={() => autoLayout('TB')}
+            title="Auto-arrange notes into a hierarchy (top-down)"
+          >
+            ⤵<span className="btn-label"> Arrange</span>
+          </button>
+          <button
+            className="ghost"
+            onClick={() => autoLayout('LR')}
+            title="Auto-arrange left-to-right"
+          >
+            ⤷<span className="btn-label"> L→R</span>
+          </button>
           <div className="spacer" />
           <input
             ref={filterRef}
@@ -390,9 +453,6 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
             title="Recall mode: blur note bodies, click a note to reveal (r)"
           >
             🧠<span className="btn-label"> Recall</span>
-          </button>
-          <button className="ghost" onClick={snapshot} title="Commit a git snapshot of the project">
-            📸<span className="btn-label"> {snapMsg || 'Snapshot'}</span>
           </button>
           <a
             className="btn ghost"
@@ -435,7 +495,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
           fitView
           minZoom={0.05}
           maxZoom={2.5}
-          colorMode="dark"
+          colorMode={theme}
         >
           <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} />
           <Controls />
@@ -443,19 +503,12 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
             pannable
             zoomable
             nodeColor={(n) => NODE_COLORS[n.data?.color] || '#262b36'}
-            maskColor="rgba(10, 12, 16, 0.7)"
+            maskColor={
+              theme === 'light' ? 'rgba(220, 224, 230, 0.7)' : 'rgba(10, 12, 16, 0.7)'
+            }
           />
         </ReactFlow>
 
-        {selNode && (
-          <Inspector
-            node={selNode}
-            onChangeData={(patch) => updateNodeData(selNode.id, patch)}
-            onChangeDims={(dims) => updateNodeDims(selNode.id, dims)}
-            onDelete={() => deleteNode(selNode.id)}
-            onMaximize={() => setMaxNodeId(selNode.id)}
-          />
-        )}
         {selEdge && (
           <Inspector
             edge={selEdge}
@@ -469,6 +522,8 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
           <NoteModal
             node={maxNode}
             onChange={(patch) => updateNodeData(maxNode.id, patch)}
+            onChangeDims={(dims) => updateNodeDims(maxNode.id, dims)}
+            onDelete={() => deleteNode(maxNode.id)}
             onClose={() => setMaxNodeId(null)}
           />
         )}

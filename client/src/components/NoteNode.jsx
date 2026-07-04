@@ -33,7 +33,6 @@ function NoteNode({ data, selected }) {
       <div className="note-head">
         <span className="note-kind" title={kind.label}>{kind.icon}</span>
         <span className="note-title">{data.title || 'Untitled'}</span>
-        {data.flashcard && <span className="note-flash" title="Flashcard">🎴</span>}
       </div>
 
       <div
