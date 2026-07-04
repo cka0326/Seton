@@ -11,6 +11,7 @@ import {
   addEdge,
   useReactFlow,
   MarkerType,
+  ConnectionMode,
 } from '@xyflow/react';
 import NoteNode from './NoteNode.jsx';
 import NoteEdge from './NoteEdge.jsx';
@@ -64,6 +65,14 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
   const [snapMsg, setSnapMsg] = useState('');
   const rf = useReactFlow();
   const filterRef = useRef(null);
+
+  // refs so the global key handler reads current selection without re-binding
+  const selNodeIdRef = useRef(null);
+  selNodeIdRef.current = selNodeId;
+  const selEdgeIdRef = useRef(null);
+  selEdgeIdRef.current = selEdgeId;
+  const maxNodeIdRef = useRef(null);
+  maxNodeIdRef.current = maxNodeId;
 
   const firstRun = useRef(true);
   const latest = useRef({ nodes, edges, dirty: false, name: canvasName || doc.name });
@@ -185,21 +194,50 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
     [rf, addNoteAt]
   );
 
-  // keyboard shortcuts
+  const deselectAll = useCallback(() => {
+    setNodes((ns) =>
+      ns.some((n) => n.selected) ? ns.map((n) => ({ ...n, selected: false })) : ns
+    );
+    setEdges((es) =>
+      es.some((e) => e.selected) ? es.map((e) => ({ ...e, selected: false })) : es
+    );
+  }, []);
+
+  // keyboard shortcuts (deletion is handled by React Flow's deleteKeyCode)
   useEffect(() => {
     const onKey = (e) => {
-      const tag = e.target.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target.isContentEditable) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === 'n') addNote('note');
-      else if (e.key === '/') {
+      const el = e.target;
+      const typing =
+        el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+
+      if (e.key === 'Escape') {
+        if (typing) {
+          el.blur();
+        } else if (!maxNodeIdRef.current) {
+          // let the maximized-note modal handle its own Escape
+          if (filter) setFilter('');
+          deselectAll();
+        }
+        return;
+      }
+
+      if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (e.key === 'n') {
+        e.preventDefault();
+        addNote('note');
+      } else if (e.key === '/') {
         e.preventDefault();
         filterRef.current?.focus();
-      } else if (e.key === 'r') setRecall((v) => !v);
+      } else if (e.key === 'r') {
+        setRecall((v) => !v);
+      } else if (e.key === 'e' || e.key === 'Enter') {
+        if (selNodeIdRef.current) setMaxNodeId(selNodeIdRef.current);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [addNote]);
+  }, [addNote, deselectAll, filter]);
 
   // focus a node requested from search results
   useEffect(() => {
@@ -346,8 +384,10 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled }) {
           onSelectionChange={onSelectionChange}
           onNodeDoubleClick={(_e, node) => setMaxNodeId(node.id)}
           onPaneClick={onPaneClick}
+          connectionMode={ConnectionMode.Loose}
           zoomOnDoubleClick={false}
           deleteKeyCode={['Backspace', 'Delete']}
+          multiSelectionKeyCode={['Meta', 'Shift']}
           fitView
           minZoom={0.05}
           maxZoom={2.5}

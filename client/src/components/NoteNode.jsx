@@ -23,10 +23,12 @@ function NoteNode({ data, selected }) {
       title={recall ? 'Recall mode: click to reveal / hide' : undefined}
     >
       <NodeResizer isVisible={selected} minWidth={160} minHeight={80} />
-      <Handle type="target" position={Position.Top} id="tt" />
-      <Handle type="target" position={Position.Left} id="tl" />
-      <Handle type="source" position={Position.Right} id="sr" />
-      <Handle type="source" position={Position.Bottom} id="sb" />
+      {/* Every side is a source handle; with ConnectionMode.Loose it can also
+          receive, so the arrow direction follows the drag (start → drop). */}
+      <Handle type="source" position={Position.Top} id="t" />
+      <Handle type="source" position={Position.Right} id="r" />
+      <Handle type="source" position={Position.Bottom} id="b" />
+      <Handle type="source" position={Position.Left} id="l" />
 
       <div className="note-head">
         <span className="note-kind" title={kind.label}>{kind.icon}</span>

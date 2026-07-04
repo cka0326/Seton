@@ -122,6 +122,25 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
     refreshStats();
   };
 
+  // Esc closes an open side panel (Search / History); Cmd/Ctrl+F opens Search.
+  // The canvas board and the review overlay handle their own Escape.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (reviewing) return;
+      const el = e.target;
+      const typing =
+        el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        setPanel((p) => (p === 'search' ? null : 'search'));
+      } else if (e.key === 'Escape' && panel && !typing) {
+        setPanel(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [panel, reviewing]);
+
   if (!project) return <div className="loading">Loading project…</div>;
 
   return (
@@ -207,7 +226,8 @@ export default function ProjectView({ projectId, onClose, onMissing }) {
             </>
           )}
           <div className="muted tiny-text">
-            n new note · / filter · r recall · double-click note to expand
+            n new · e/dbl-click expand · Del delete · Esc deselect · / filter ·
+            r recall · ⌘F search · drag handle→handle to link
           </div>
         </div>
       </aside>
