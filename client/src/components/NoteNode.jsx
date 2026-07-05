@@ -1,6 +1,7 @@
 import { memo, useContext, useEffect, useState } from 'react';
 import { Handle, Position, NodeResizer } from '@xyflow/react';
 import Markdown from './Markdown.jsx';
+import Icon from './Icon.jsx';
 import { NODE_COLORS, KINDS } from '../constants.js';
 import { RecallContext } from '../contexts.js';
 
@@ -31,8 +32,18 @@ function NoteNode({ data, selected }) {
       <Handle type="source" position={Position.Left} id="l" />
 
       <div className="note-head">
-        <span className="note-kind" title={kind.label}>{kind.icon}</span>
+        <span className="note-kind" title={kind.label}>
+          <Icon name={kind.icon} size={13} />
+        </span>
         <span className="note-title">{data.title || 'Untitled'}</span>
+        {data.source && (
+          <span
+            className="note-link-flag"
+            title="Mirrors a reader annotation — updates when the annotation changes (editing the body here detaches it)"
+          >
+            <Icon name="link" size={11} />
+          </span>
+        )}
       </div>
 
       {/* nowheel: let the wheel scroll overflowing note content instead of

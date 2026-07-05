@@ -54,6 +54,8 @@ export const api = {
   deleteDoc: (pid, did) =>
     req(`/api/projects/${pid}/documents/${did}`, { method: 'DELETE' }),
 
+  syncStatus: () => req('/api/sync/status'),
+
   search: (pid, q) =>
     req(`/api/projects/${pid}/search?q=${encodeURIComponent(q)}`),
 };

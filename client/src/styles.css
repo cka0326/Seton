@@ -121,7 +121,7 @@ button.ghost.active {
 button.danger { color: var(--danger); }
 button.danger:hover { border-color: var(--danger); }
 button.small { padding: 3px 8px; font-size: 12px; }
-button.tiny { padding: 2px 5px; font-size: 11px; }
+button.tiny, a.btn.tiny { padding: 2px 5px; font-size: 11px; }
 
 :is(button, a.btn, input, select, textarea):focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
@@ -315,6 +315,13 @@ kbd {
   color: var(--accent);
   border-color: var(--accent);
 }
+.sync-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: default;
+}
+.sync-row .icon { color: var(--green); }
 .sidebar-top .project-name {
   font-size: 16px;
   margin: 8px 2px 0;
@@ -559,6 +566,18 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   font-size: 12px;
   background: rgba(255, 255, 255, 0.55);
   box-shadow: inset 0 0 0 1px rgba(14, 20, 33, 0.08);
+}
+/* the modal header isn't on a pastel card — use theme chrome colors there */
+.modal-head .note-kind {
+  background: var(--bg-3);
+  box-shadow: inset 0 0 0 1px var(--border);
+  color: var(--muted);
+}
+.note-link-flag {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  opacity: 0.55;
 }
 .note-title {
   font-weight: 650;

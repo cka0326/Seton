@@ -444,7 +444,14 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
 
   const updateNodeData = useCallback((id, patch) => {
     setNodes((ns) =>
-      ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n))
+      ns.map((n) => {
+        if (n.id !== id) return n;
+        const data = { ...n.data, ...patch };
+        // hand-editing the body detaches the note from its source annotation,
+        // so reader-side edits can never overwrite canvas edits
+        if ('content' in patch && data.source) delete data.source;
+        return { ...n, data };
+      })
     );
   }, []);
 
@@ -501,7 +508,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
               title={`Add ${v.label} (n adds a plain note; double-click canvas also works)`}
               onClick={() => addNote(k)}
             >
-              {v.icon}<span className="btn-label"> {v.label}</span>
+              <Icon name={v.icon} /><span className="btn-label"> {v.label}</span>
             </button>
           ))}
           <span className="tb-sep" />

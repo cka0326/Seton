@@ -31,7 +31,20 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
     () => localStorage.getItem('seton:sidebarOpen') !== '0'
   );
   const [toast, setToast] = useState(null);
+  const [syncInfo, setSyncInfo] = useState(null);
   const toastTimer = useRef(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api.syncStatus().then((s) => alive && setSyncInfo(s)).catch(() => {});
+    load();
+    const t = setInterval(load, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
 
   const toggleSidebar = useCallback(() => {
     setSidebarOpen((v) => {
@@ -186,18 +199,16 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   };
 
   // Turn a highlight into a note node on the project's default canvas
-  // (falling back to the active canvas, then the first one).
-  const sendToCanvas = useCallback(async ({ quote, note, color, section }) => {
+  // (falling back to the active canvas, then the first one). Notes remember
+  // their source annotation, so re-sending updates in place and later
+  // annotation edits propagate (see the document PUT handler server-side).
+  const sendToCanvas = useCallback(async ({ quote, note, color, section, hlId }) => {
     const p = await api.getProject(projectId);
     const has = (id) => id && p.canvases.some((c) => c.id === id);
     const cid = [p.defaultCanvasId, activeCid, p.canvases[0]?.id].find(has);
     if (!cid) throw new Error('no canvas in this project');
     const canvas = await api.getCanvas(projectId, cid);
     const nodes = canvas.nodes || [];
-    const bottom = nodes.reduce(
-      (m, n) => Math.max(m, n.position.y + (n.height || DEFAULT_NODE.height)),
-      0
-    );
     const docTitle = docs.find((d) => d.id === openDocId)?.title || '';
     const words = quote.split(/\s+/);
     const title =
@@ -207,6 +218,30 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
       `> ${quote.trim()}` +
       (note?.trim() ? `\n\n${note.trim()}` : '') +
       (docTitle ? `\n\n— *${docTitle}*` : '');
+    const name = p.canvases.find((c) => c.id === cid)?.name || 'canvas';
+
+    const existing =
+      hlId &&
+      nodes.find(
+        (n) => n.data?.source?.hlId === hlId && n.data?.source?.docId === openDocId
+      );
+    if (existing) {
+      existing.data = {
+        ...existing.data,
+        title,
+        content,
+        color: HL_TO_NODE_COLOR[color] || existing.data.color,
+      };
+      await api.saveCanvas(projectId, canvas);
+      refreshStats();
+      showToast(`Note updated on “${name}”`);
+      return;
+    }
+
+    const bottom = nodes.reduce(
+      (m, n) => Math.max(m, n.position.y + (n.height || DEFAULT_NODE.height)),
+      0
+    );
     canvas.nodes = nodes.concat({
       id: newId('n'),
       type: 'note',
@@ -221,11 +256,11 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
         fontSize: DEFAULT_NODE.fontSize,
         textAlign: 'left',
         tags: docTitle ? [slug(docTitle)] : [],
+        ...(hlId && openDocId ? { source: { docId: openDocId, hlId } } : {}),
       },
     });
     await api.saveCanvas(projectId, canvas);
     refreshStats();
-    const name = p.canvases.find((c) => c.id === cid)?.name || 'canvas';
     showToast(`Note added to “${name}”`);
   }, [projectId, activeCid, docs, openDocId, refreshStats, showToast]);
 
@@ -393,6 +428,12 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
                     {d.percent >= 100 ? <Icon name="check" size={12} /> : `${d.percent}%`}
                   </span>
                   <span className="canvas-actions">
+                    <a
+                      className="btn ghost tiny"
+                      href={`/api/projects/${projectId}/documents/${d.id}/export.md`}
+                      onClick={(e) => e.stopPropagation()}
+                      title="Download as Markdown"
+                    ><Icon name="download" size={12} /></a>
                     <button
                       className="ghost tiny"
                       onClick={(e) => {
@@ -437,6 +478,17 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
         </div>
 
         <div className="sidebar-foot">
+          {syncInfo?.enabled && (
+            <div
+              className="stats-row sync-row"
+              title={`Projects are mirrored to ${syncInfo.dir} — Google Drive keeps them backed up and synced across machines`}
+            >
+              <Icon name="cloud" size={12} /> Drive sync
+              {syncInfo.lastSyncAt && (
+                <> · {new Date(syncInfo.lastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</>
+              )}
+            </div>
+          )}
           {stats && (
             <div className="stats-row">
               {stats.notes} notes · {stats.words.toLocaleString()} words

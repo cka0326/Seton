@@ -28,7 +28,9 @@ export default function NoteModal({ node, onChange, onChangeDims, onDelete, onCl
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
-          <span className="note-kind">{kind.icon}</span>
+          <span className="note-kind">
+            <Icon name={kind.icon} size={14} />
+          </span>
           <input
             className="modal-title-input"
             value={d.title || ''}
@@ -54,7 +56,7 @@ export default function NoteModal({ node, onChange, onChangeDims, onDelete, onCl
                 onChange={(e) => onChange({ kind: e.target.value })}
               >
                 {Object.entries(KINDS).map(([k, v]) => (
-                  <option key={k} value={k}>{v.icon} {v.label}</option>
+                  <option key={k} value={k}>{v.label}</option>
                 ))}
               </select>
             </label>
@@ -148,7 +150,9 @@ export default function NoteModal({ node, onChange, onChangeDims, onDelete, onCl
           <div className="modal-preview">
             <div className="note-preview-card" style={{ background: cardColor }}>
               <div className="note-head">
-                <span className="note-kind" title={kind.label}>{kind.icon}</span>
+                <span className="note-kind" title={kind.label}>
+                  <Icon name={kind.icon} size={13} />
+                </span>
                 <span className="note-title">{d.title || 'Untitled'}</span>
               </div>
               <div className="note-preview-body" style={previewStyle}>

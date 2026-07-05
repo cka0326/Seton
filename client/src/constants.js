@@ -9,12 +9,14 @@ export const NODE_COLORS = {
   pink: '#f8dbed',
 };
 
+// `icon` is a name from the shared SVG Icon set (Icon.jsx), so note kinds
+// render with the same stroke style as the rest of the UI chrome.
 export const KINDS = {
-  note: { icon: '📝', label: 'Note' },
-  question: { icon: '❓', label: 'Question' },
-  definition: { icon: '📖', label: 'Definition' },
-  idea: { icon: '💡', label: 'Idea' },
-  resource: { icon: '🔗', label: 'Resource' },
+  note: { icon: 'note', label: 'Note' },
+  question: { icon: 'question', label: 'Question' },
+  definition: { icon: 'bookOpen', label: 'Definition' },
+  idea: { icon: 'bulb', label: 'Idea' },
+  resource: { icon: 'link', label: 'Resource' },
 };
 
 // Highlight pens for the document reader. Marks get the `hl-<name>` CSS

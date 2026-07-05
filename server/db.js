@@ -145,9 +145,17 @@ export function createStore(dataDir) {
         updated_at = excluded.updated_at
     `),
     deleteDoc: db.prepare(`DELETE FROM documents WHERE project_id = ? AND id = ?`),
+
+    getMeta: db.prepare(`SELECT value FROM meta WHERE key = ?`),
+    setMeta: db.prepare(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`),
+    deleteMeta: db.prepare(`DELETE FROM meta WHERE key = ?`),
   };
 
   const store = {
+    getMeta: (key) => q.getMeta.get(key)?.value ?? null,
+    setMeta: (key, value) => q.setMeta.run(key, String(value)),
+    deleteMeta: (key) => q.deleteMeta.run(key),
+
     transaction(fn) {
       db.exec('BEGIN');
       try {

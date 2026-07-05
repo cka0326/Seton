@@ -354,6 +354,7 @@ export default function DocumentReader({
         note: hl.note,
         color: hl.color,
         section: sectionForHl(hl),
+        hlId: hl.id,
       });
       setPopover(null);
     } catch (e) {
@@ -428,6 +429,13 @@ export default function DocumentReader({
         >
           <Icon name="highlighter" />
         </button>
+        <a
+          className="btn ghost"
+          href={`/api/projects/${projectId}/documents/${docId}/export.md`}
+          title="Download this document (with highlights & annotations) as Markdown"
+        >
+          <Icon name="download" />
+        </a>
         <button className="ghost danger" onClick={deleteDoc} title="Delete document">
           <Icon name="trash" />
         </button>

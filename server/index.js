@@ -4,6 +4,8 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createStore } from './db.js';
+import { createSync } from './sync.js';
+import { canvasToMarkdown, docToMarkdown, projectToMarkdown } from './markdown.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -11,6 +13,9 @@ const DATA_DIR = process.env.SETON_DATA_DIR || path.join(ROOT, 'data');
 const PORT = process.env.PORT || 4517;
 
 const store = createStore(DATA_DIR);
+const sync = createSync(store);
+sync.restoreIfEmpty();
+sync.syncAll();
 
 const app = express();
 app.use(cors());
@@ -63,6 +68,35 @@ const docSummary = (d) => ({
   readSeconds: d.progress?.readSeconds || 0,
 });
 
+// Body of a canvas note that mirrors an annotation. Must match what the
+// client builds in sendToCanvas so server refreshes are byte-identical.
+const annotationContent = (hl, docTitle) =>
+  `> ${(hl.quote || '').trim()}` +
+  (hl.note?.trim() ? `\n\n${hl.note.trim()}` : '') +
+  (docTitle ? `\n\n— *${docTitle}*` : '');
+
+// Issue #11: notes sent to a canvas keep data.source = { docId, hlId }.
+// When a document's highlights change, refresh every linked note so edited
+// annotations show up on the canvas.
+function syncAnnotationNodes(pid, doc) {
+  const byId = new Map((doc.highlights || []).map((h) => [h.id, h]));
+  for (const canvas of store.listCanvases(pid)) {
+    let changed = false;
+    for (const n of canvas.nodes || []) {
+      const src = n.data?.source;
+      if (!src || src.docId !== doc.id) continue;
+      const hl = byId.get(src.hlId);
+      if (!hl) continue; // highlight deleted — leave the note as it was
+      const content = annotationContent(hl, doc.title);
+      if (n.data.content !== content) {
+        n.data = { ...n.data, content };
+        changed = true;
+      }
+    }
+    if (changed) store.saveCanvas(pid, canvas, { touch: false });
+  }
+}
+
 // Title fallback: first markdown heading, else first non-empty line.
 function inferDocTitle(content) {
   for (const line of (content || '').split('\n')) {
@@ -72,42 +106,6 @@ function inferDocTitle(content) {
     return (m ? m[1] : t).replace(/[*_`#]/g, '').slice(0, 120);
   }
   return 'Untitled document';
-}
-
-// ---------- markdown generation (for exports) ----------
-
-function canvasToMarkdown(canvas) {
-  const lines = [`# ${canvas.name || 'Untitled canvas'}`, ''];
-  const byId = new Map((canvas.nodes || []).map((n) => [n.id, n]));
-  for (const n of canvas.nodes || []) {
-    const d = n.data || {};
-    lines.push(`## ${d.title || 'Untitled note'}`);
-    const meta = [];
-    if (d.kind && d.kind !== 'note') meta.push(`kind: ${d.kind}`);
-    if (d.tags && d.tags.length) meta.push(`tags: ${d.tags.join(', ')}`);
-    if (meta.length) lines.push(`*${meta.join(' · ')}*`);
-    lines.push('');
-    if (d.content) lines.push(d.content, '');
-    const out = (canvas.edges || []).filter((e) => e.source === n.id);
-    if (out.length) {
-      lines.push('**Connections:**');
-      for (const e of out) {
-        const target = byId.get(e.target);
-        const label = e.data && e.data.label ? ` — ${e.data.label}` : '';
-        lines.push(`- → ${(target && target.data && target.data.title) || e.target}${label}`);
-      }
-      lines.push('');
-    }
-  }
-  return lines.join('\n');
-}
-
-function projectToMarkdown(project, canvases) {
-  const parts = [`# ${project.name}`, '', `_Exported ${new Date().toISOString()}_`, ''];
-  for (const c of canvases) {
-    parts.push('---', '', canvasToMarkdown(c));
-  }
-  return parts.join('\n');
 }
 
 // ---------- async route helper ----------
@@ -134,6 +132,7 @@ app.post('/api/projects', wrap(async (req, res) => {
       { touch: false }
     );
   });
+  sync.schedule(project.id);
   res.status(201).json(project);
 }));
 
@@ -152,11 +151,13 @@ app.put('/api/projects/:pid', wrap(async (req, res) => {
   }
   project.updatedAt = Date.now();
   store.updateProject(project);
+  sync.schedule(project.id);
   res.json(project);
 }));
 
 app.delete('/api/projects/:pid', wrap(async (req, res) => {
   mustProject(req.params.pid);
+  sync.removeProject(req.params.pid);
   store.deleteProject(req.params.pid);
   res.json({ ok: true });
 }));
@@ -180,6 +181,7 @@ app.post('/api/projects/:pid/canvases', wrap(async (req, res) => {
     edges: [],
   };
   store.saveCanvas(req.params.pid, canvas);
+  sync.schedule(req.params.pid);
   res.status(201).json(canvas);
 }));
 
@@ -194,12 +196,15 @@ app.put('/api/projects/:pid/canvases/:cid', wrap(async (req, res) => {
   }
   mustProject(req.params.pid);
   doc.updatedAt = Date.now();
-  res.json(store.saveCanvas(req.params.pid, doc));
+  const saved = store.saveCanvas(req.params.pid, doc);
+  sync.schedule(req.params.pid);
+  res.json(saved);
 }));
 
 app.delete('/api/projects/:pid/canvases/:cid', wrap(async (req, res) => {
   mustProject(req.params.pid);
   store.deleteCanvas(req.params.pid, assertId(req.params.cid, 'canvas id'));
+  sync.schedule(req.params.pid);
   res.json({ ok: true });
 }));
 
@@ -225,6 +230,7 @@ app.post('/api/projects/:pid/documents', wrap(async (req, res) => {
     progress: { scroll: 0, percent: 0, lastReadAt: null },
   };
   store.saveDoc(req.params.pid, doc);
+  sync.schedule(req.params.pid);
   res.status(201).json(doc);
 }));
 
@@ -256,12 +262,15 @@ app.put('/api/projects/:pid/documents/:did', wrap(async (req, res) => {
   }
   if (touched) doc.updatedAt = Date.now();
   store.saveDoc(req.params.pid, doc);
+  if (touched) syncAnnotationNodes(req.params.pid, doc); // annotation/title edits → linked notes
+  sync.schedule(req.params.pid);
   res.json(doc);
 }));
 
 app.delete('/api/projects/:pid/documents/:did', wrap(async (req, res) => {
   mustProject(req.params.pid);
   store.deleteDoc(req.params.pid, assertId(req.params.did, 'document id'));
+  sync.schedule(req.params.pid);
   res.json({ ok: true });
 }));
 
@@ -349,15 +358,7 @@ app.get('/api/projects/:pid/export.md', wrap(async (req, res) => {
   const documents = store.listDocs(project.id);
   const parts = [projectToMarkdown(project, canvases)];
   for (const d of documents) {
-    parts.push('---', '', `# ${d.title}`, '', d.content, '');
-    if ((d.highlights || []).length) {
-      parts.push('## Highlights & annotations', '');
-      for (const h of d.highlights) {
-        parts.push(`- > ${h.quote.replace(/\s+/g, ' ')}`);
-        if (h.note) parts.push(`  - ${h.note}`);
-      }
-      parts.push('');
-    }
+    parts.push('---', '', docToMarkdown(d));
   }
   download(
     res,
@@ -377,6 +378,18 @@ app.get('/api/projects/:pid/canvases/:cid/export.md', wrap(async (req, res) => {
   const doc = mustCanvas(req.params.pid, req.params.cid);
   download(res, `${doc.name.replace(/[^\w-]+/g, '_')}.md`,
     'text/markdown', canvasToMarkdown(doc));
+}));
+
+app.get('/api/projects/:pid/documents/:did/export.md', wrap(async (req, res) => {
+  const doc = mustDoc(req.params.pid, req.params.did);
+  download(res, `${doc.title.replace(/[^\w-]+/g, '_')}.md`,
+    'text/markdown', docToMarkdown(doc));
+}));
+
+// ---------- drive sync ----------
+
+app.get('/api/sync/status', wrap(async (_req, res) => {
+  res.json(sync.status());
 }));
 
 // ---------- import ----------
@@ -405,6 +418,7 @@ app.post('/api/projects/import', wrap(async (req, res) => {
       store.saveDoc(project.id, d, { touch: false });
     }
   });
+  sync.schedule(project.id);
   res.status(201).json(project);
 }));
 
@@ -427,4 +441,5 @@ app.use((err, _req, res, _next) => {
 
 app.listen(PORT, () => {
   console.log(`Seton server on http://localhost:${PORT} (db: ${path.join(DATA_DIR, 'seton.db')})`);
+  if (sync.enabled) console.log(`Drive sync: mirroring projects to ${sync.dir}`);
 });
