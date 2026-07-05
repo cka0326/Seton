@@ -167,11 +167,19 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
 
   // React Flow v12 reports edge selection through onSelectionChange (not through
   // onEdgesChange), so this is the single source of truth for what's selected.
+  // Node ids are kept in the order they were selected (React Flow reports them
+  // in array order), so "link selection" can chain notes the way they were picked.
   const selectedRef = useRef({ nodes: [], edges: [] });
+  const [selCount, setSelCount] = useState(0);
   const onSelectionChange = useCallback(({ nodes: sn, edges: se }) => {
-    selectedRef.current = { nodes: sn.map((n) => n.id), edges: se.map((e) => e.id) };
+    const ids = new Set(sn.map((n) => n.id));
+    const kept = selectedRef.current.nodes.filter((id) => ids.has(id));
+    const keptSet = new Set(kept);
+    const ordered = kept.concat(sn.map((n) => n.id).filter((id) => !keptSet.has(id)));
+    selectedRef.current = { nodes: ordered, edges: se.map((e) => e.id) };
     setSelNodeId(sn[0]?.id || null);
     setSelEdgeId(se[0]?.id || null);
+    setSelCount(sn.length);
   }, []);
 
   const addNoteAt = useCallback((kind, position) => {
@@ -239,6 +247,46 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
         }));
       if (!copies.length) return ns;
       return ns.map((n) => ({ ...n, selected: false })).concat(copies);
+    });
+  }, []);
+
+  // Chain the selected notes with edges in the order they were selected
+  // (first → second → third …), skipping pairs that are already connected.
+  const linkSelection = useCallback(() => {
+    const order = selectedRef.current.nodes;
+    if (order.length < 2) return;
+    const byId = new Map(latest.current.nodes.map((n) => [n.id, n]));
+    const center = (n) => ({
+      x: n.position.x + (n.width || n.measured?.width || DEFAULT_NODE.width) / 2,
+      y: n.position.y + (n.height || n.measured?.height || DEFAULT_NODE.height) / 2,
+    });
+    setEdges((es) => {
+      const linked = new Set(es.map((e) => `${e.source}→${e.target}`));
+      const added = [];
+      for (let i = 0; i < order.length - 1; i++) {
+        const s = byId.get(order[i]);
+        const t = byId.get(order[i + 1]);
+        if (!s || !t) continue;
+        if (linked.has(`${s.id}→${t.id}`) || linked.has(`${t.id}→${s.id}`)) continue;
+        // attach to the sides facing each other so the chain reads cleanly
+        const dx = center(t).x - center(s).x;
+        const dy = center(t).y - center(s).y;
+        const [sh, th] =
+          Math.abs(dx) >= Math.abs(dy)
+            ? dx >= 0 ? ['r', 'l'] : ['l', 'r']
+            : dy >= 0 ? ['b', 't'] : ['t', 'b'];
+        linked.add(`${s.id}→${t.id}`);
+        added.push({
+          id: newId('e'),
+          source: s.id,
+          target: t.id,
+          sourceHandle: sh,
+          targetHandle: th,
+          type: 'note',
+          data: { label: '' },
+        });
+      }
+      return added.length ? es.concat(added) : es;
     });
   }, []);
 
@@ -332,6 +380,8 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
         filterRef.current?.focus();
       } else if (e.key === 'r') {
         setRecall((v) => !v);
+      } else if (e.key === 'l') {
+        linkSelection();
       } else if (e.key === 'e' || e.key === 'Enter') {
         if (selNodeIdRef.current) setMaxNodeId(selNodeIdRef.current);
       }
@@ -340,7 +390,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
     // edge/node accessibility handler consumes the event
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [addNote, deselectAll, duplicateSelection, filter]);
+  }, [addNote, deselectAll, duplicateSelection, linkSelection, filter]);
 
   // focus a node requested from search results
   useEffect(() => {
@@ -439,6 +489,14 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
             title="Auto-arrange left-to-right"
           >
             <Icon name="layoutLR" /><span className="btn-label"> L→R</span>
+          </button>
+          <button
+            className="ghost"
+            onClick={linkSelection}
+            disabled={selCount < 2}
+            title="Link selected notes in the order they were selected (l)"
+          >
+            <Icon name="link" /><span className="btn-label"> Link</span>
           </button>
           <div className="spacer" />
           <input

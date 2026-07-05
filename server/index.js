@@ -1,14 +1,16 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
-import fs from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createStore } from './db.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = process.env.SETON_DATA_DIR || path.join(ROOT, 'data');
 const PORT = process.env.PORT || 4517;
+
+const store = createStore(DATA_DIR);
 
 const app = express();
 app.use(cors());
@@ -18,82 +20,34 @@ const ID_RE = /^[a-z0-9-]+$/i;
 const newId = () =>
   Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
+function httpError(status, message) {
+  const err = new Error(message);
+  err.status = status;
+  return err;
+}
+
 function assertId(id, kind = 'id') {
-  if (!id || !ID_RE.test(id)) {
-    const err = new Error(`invalid ${kind}`);
-    err.status = 400;
-    throw err;
-  }
+  if (!id || !ID_RE.test(id)) throw httpError(400, `invalid ${kind}`);
   return id;
 }
 
-const projDir = (pid) => path.join(DATA_DIR, assertId(pid, 'project id'));
-const canvasFile = (pid, cid) =>
-  path.join(projDir(pid), 'canvases', `${assertId(cid, 'canvas id')}.json`);
-const markdownFile = (pid, cid) =>
-  path.join(projDir(pid), 'markdown', `${assertId(cid, 'canvas id')}.md`);
-const docFile = (pid, did) =>
-  path.join(projDir(pid), 'documents', `${assertId(did, 'document id')}.json`);
-
-async function readJSON(file) {
-  return JSON.parse(await fs.readFile(file, 'utf8'));
-}
-// atomic write: never let a concurrent read see a half-written file
-async function writeFileAtomic(file, content) {
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, content, 'utf8');
-  await fs.rename(tmp, file);
-}
-async function writeJSON(file, obj) {
-  await writeFileAtomic(file, JSON.stringify(obj, null, 2) + '\n');
+function mustProject(pid) {
+  const project = store.getProject(assertId(pid, 'project id'));
+  if (!project) throw httpError(404, 'project not found');
+  return project;
 }
 
-async function loadProject(pid) {
-  const file = path.join(projDir(pid), 'project.json');
-  if (!existsSync(file)) {
-    const err = new Error('project not found');
-    err.status = 404;
-    throw err;
-  }
-  return readJSON(file);
+function mustCanvas(pid, cid) {
+  mustProject(pid);
+  const canvas = store.getCanvas(pid, assertId(cid, 'canvas id'));
+  if (!canvas) throw httpError(404, 'canvas not found');
+  return canvas;
 }
 
-async function listCanvases(pid) {
-  const dir = path.join(projDir(pid), 'canvases');
-  if (!existsSync(dir)) return [];
-  const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.json'));
-  const docs = await Promise.all(files.map((f) => readJSON(path.join(dir, f))));
-  docs.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-  return docs;
-}
-
-// ---------- documents (study material: pasted notes, papers, docs) ----------
-
-async function listDocs(pid) {
-  const dir = path.join(projDir(pid), 'documents');
-  if (!existsSync(dir)) return [];
-  const files = (await fs.readdir(dir)).filter((f) => f.endsWith('.json'));
-  const docs = await Promise.all(files.map((f) => readJSON(path.join(dir, f))));
-  docs.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  return docs;
-}
-
-async function loadDoc(pid, did) {
-  const file = docFile(pid, did);
-  if (!existsSync(file)) {
-    const err = new Error('document not found');
-    err.status = 404;
-    throw err;
-  }
-  return readJSON(file);
-}
-
-async function saveDoc(pid, doc) {
-  await fs.mkdir(path.join(projDir(pid), 'documents'), { recursive: true });
-  await writeJSON(docFile(pid, doc.id), doc);
-  const project = await loadProject(pid);
-  project.updatedAt = Date.now();
-  await writeJSON(path.join(projDir(pid), 'project.json'), project);
+function mustDoc(pid, did) {
+  mustProject(pid);
+  const doc = store.getDoc(pid, assertId(did, 'document id'));
+  if (!doc) throw httpError(404, 'document not found');
   return doc;
 }
 
@@ -119,7 +73,7 @@ function inferDocTitle(content) {
   return 'Untitled document';
 }
 
-// ---------- markdown generation (readable mirror of each canvas) ----------
+// ---------- markdown generation (for exports) ----------
 
 function canvasToMarkdown(canvas) {
   const lines = [`# ${canvas.name || 'Untitled canvas'}`, ''];
@@ -155,81 +109,40 @@ function projectToMarkdown(project, canvases) {
   return parts.join('\n');
 }
 
-async function saveCanvas(pid, doc) {
-  doc.updatedAt = Date.now();
-  await writeJSON(canvasFile(pid, doc.id), doc);
-  await writeFileAtomic(markdownFile(pid, doc.id), canvasToMarkdown(doc));
-  const project = await loadProject(pid);
-  project.updatedAt = Date.now();
-  await writeJSON(path.join(projDir(pid), 'project.json'), project);
-  return doc;
-}
-
 // ---------- async route helper ----------
 
-const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+const wrap = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
 // ---------- projects ----------
 
 app.get('/api/projects', wrap(async (_req, res) => {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  const entries = await fs.readdir(DATA_DIR, { withFileTypes: true });
-  const projects = [];
-  for (const e of entries) {
-    if (!e.isDirectory()) continue;
-    const file = path.join(DATA_DIR, e.name, 'project.json');
-    if (!existsSync(file)) continue;
-    const p = await readJSON(file);
-    const canvases = await listCanvases(p.id);
-    const docs = await listDocs(p.id);
-    projects.push({
-      ...p,
-      canvasCount: canvases.length,
-      noteCount: canvases.reduce((s, c) => s + (c.nodes || []).length, 0),
-      docCount: docs.length,
-    });
-  }
-  projects.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-  res.json(projects);
+  res.json(store.listProjects());
 }));
 
 app.post('/api/projects', wrap(async (req, res) => {
   const name = (req.body.name || '').trim() || 'Untitled project';
-  const id = newId();
-  const dir = projDir(id);
-  await fs.mkdir(path.join(dir, 'canvases'), { recursive: true });
-  await fs.mkdir(path.join(dir, 'markdown'), { recursive: true });
   const now = Date.now();
-  const project = { id, name, createdAt: now, updatedAt: now };
-  await writeJSON(path.join(dir, 'project.json'), project);
-
-  const canvas = {
-    id: newId(),
-    name: 'Main',
-    createdAt: now,
-    updatedAt: now,
-    nodes: [],
-    edges: [],
-  };
-  await writeJSON(canvasFile(id, canvas.id), canvas);
-  await fs.writeFile(markdownFile(id, canvas.id), canvasToMarkdown(canvas), 'utf8');
-
+  const project = { id: newId(), name, createdAt: now, updatedAt: now };
+  store.transaction(() => {
+    store.createProject(project);
+    store.saveCanvas(
+      project.id,
+      { id: newId(), name: 'Main', createdAt: now, updatedAt: now, nodes: [], edges: [] },
+      { touch: false }
+    );
+  });
   res.status(201).json(project);
 }));
 
 app.get('/api/projects/:pid', wrap(async (req, res) => {
-  const project = await loadProject(req.params.pid);
-  const canvases = (await listCanvases(req.params.pid)).map((c) => ({
-    id: c.id,
-    name: c.name,
-    updatedAt: c.updatedAt,
-    nodeCount: (c.nodes || []).length,
-  }));
-  res.json({ ...project, canvases });
+  const project = mustProject(req.params.pid);
+  res.json({ ...project, canvases: store.canvasSummaries(project.id) });
 }));
 
 app.put('/api/projects/:pid', wrap(async (req, res) => {
-  const project = await loadProject(req.params.pid);
+  const project = mustProject(req.params.pid);
   if (typeof req.body.name === 'string' && req.body.name.trim()) {
     project.name = req.body.name.trim();
   }
@@ -237,26 +150,25 @@ app.put('/api/projects/:pid', wrap(async (req, res) => {
     project.defaultCanvasId = req.body.defaultCanvasId || null;
   }
   project.updatedAt = Date.now();
-  await writeJSON(path.join(projDir(req.params.pid), 'project.json'), project);
+  store.updateProject(project);
   res.json(project);
 }));
 
 app.delete('/api/projects/:pid', wrap(async (req, res) => {
-  await loadProject(req.params.pid);
-  await fs.rm(projDir(req.params.pid), { recursive: true, force: true });
+  mustProject(req.params.pid);
+  store.deleteProject(req.params.pid);
   res.json({ ok: true });
 }));
 
 app.get('/api/projects/:pid/all', wrap(async (req, res) => {
-  const project = await loadProject(req.params.pid);
-  const canvases = await listCanvases(req.params.pid);
-  res.json({ project, canvases });
+  const project = mustProject(req.params.pid);
+  res.json({ project, canvases: store.listCanvases(project.id) });
 }));
 
 // ---------- canvases ----------
 
 app.post('/api/projects/:pid/canvases', wrap(async (req, res) => {
-  await loadProject(req.params.pid);
+  mustProject(req.params.pid);
   const now = Date.now();
   const canvas = {
     id: newId(),
@@ -266,50 +178,41 @@ app.post('/api/projects/:pid/canvases', wrap(async (req, res) => {
     nodes: [],
     edges: [],
   };
-  await saveCanvas(req.params.pid, canvas);
+  store.saveCanvas(req.params.pid, canvas);
   res.status(201).json(canvas);
 }));
 
 app.get('/api/projects/:pid/canvases/:cid', wrap(async (req, res) => {
-  res.json(await readJSON(canvasFile(req.params.pid, req.params.cid)));
+  res.json(mustCanvas(req.params.pid, req.params.cid));
 }));
 
 app.put('/api/projects/:pid/canvases/:cid', wrap(async (req, res) => {
   const doc = req.body;
   if (!doc || doc.id !== req.params.cid) {
-    const err = new Error('canvas id mismatch');
-    err.status = 400;
-    throw err;
+    throw httpError(400, 'canvas id mismatch');
   }
-  res.json(await saveCanvas(req.params.pid, doc));
+  mustProject(req.params.pid);
+  doc.updatedAt = Date.now();
+  res.json(store.saveCanvas(req.params.pid, doc));
 }));
 
 app.delete('/api/projects/:pid/canvases/:cid', wrap(async (req, res) => {
-  await fs.rm(canvasFile(req.params.pid, req.params.cid), { force: true });
-  await fs.rm(markdownFile(req.params.pid, req.params.cid), { force: true });
-  const project = await loadProject(req.params.pid).catch(() => null);
-  if (project && project.defaultCanvasId === req.params.cid) {
-    project.defaultCanvasId = null;
-    await writeJSON(path.join(projDir(req.params.pid), 'project.json'), project);
-  }
+  mustProject(req.params.pid);
+  store.deleteCanvas(req.params.pid, assertId(req.params.cid, 'canvas id'));
   res.json({ ok: true });
 }));
 
 // ---------- documents ----------
 
 app.get('/api/projects/:pid/documents', wrap(async (req, res) => {
-  await loadProject(req.params.pid);
-  res.json((await listDocs(req.params.pid)).map(docSummary));
+  mustProject(req.params.pid);
+  res.json(store.listDocs(req.params.pid).map(docSummary));
 }));
 
 app.post('/api/projects/:pid/documents', wrap(async (req, res) => {
-  await loadProject(req.params.pid);
+  mustProject(req.params.pid);
   const content = typeof req.body.content === 'string' ? req.body.content : '';
-  if (!content.trim()) {
-    const err = new Error('document content is empty');
-    err.status = 400;
-    throw err;
-  }
+  if (!content.trim()) throw httpError(400, 'document content is empty');
   const now = Date.now();
   const doc = {
     id: newId(),
@@ -320,19 +223,19 @@ app.post('/api/projects/:pid/documents', wrap(async (req, res) => {
     highlights: [],
     progress: { scroll: 0, percent: 0, lastReadAt: null },
   };
-  await saveDoc(req.params.pid, doc);
+  store.saveDoc(req.params.pid, doc);
   res.status(201).json(doc);
 }));
 
 app.get('/api/projects/:pid/documents/:did', wrap(async (req, res) => {
-  res.json(await loadDoc(req.params.pid, req.params.did));
+  res.json(mustDoc(req.params.pid, req.params.did));
 }));
 
 // Partial update: only the provided fields (title, content, highlights,
 // progress) are merged. Progress-only saves don't bump updatedAt so that
 // "last edited" stays meaningful.
 app.put('/api/projects/:pid/documents/:did', wrap(async (req, res) => {
-  const doc = await loadDoc(req.params.pid, req.params.did);
+  const doc = mustDoc(req.params.pid, req.params.did);
   const b = req.body || {};
   let touched = false;
   if (typeof b.title === 'string' && b.title.trim()) {
@@ -351,21 +254,23 @@ app.put('/api/projects/:pid/documents/:did', wrap(async (req, res) => {
     doc.progress = { ...doc.progress, ...b.progress };
   }
   if (touched) doc.updatedAt = Date.now();
-  await saveDoc(req.params.pid, doc);
+  store.saveDoc(req.params.pid, doc);
   res.json(doc);
 }));
 
 app.delete('/api/projects/:pid/documents/:did', wrap(async (req, res) => {
-  await fs.rm(docFile(req.params.pid, req.params.did), { force: true });
+  mustProject(req.params.pid);
+  store.deleteDoc(req.params.pid, assertId(req.params.did, 'document id'));
   res.json({ ok: true });
 }));
 
 // ---------- search ----------
 
 app.get('/api/projects/:pid/search', wrap(async (req, res) => {
+  mustProject(req.params.pid);
   const q = (req.query.q || '').toString().trim().toLowerCase();
   if (!q) return res.json([]);
-  const canvases = await listCanvases(req.params.pid);
+  const canvases = store.listCanvases(req.params.pid);
   const results = [];
   const snippet = (text, idx) => {
     const start = Math.max(0, idx - 40);
@@ -403,8 +308,7 @@ app.get('/api/projects/:pid/search', wrap(async (req, res) => {
       });
     }
   }
-  const docs = await listDocs(req.params.pid);
-  for (const d of docs) {
+  for (const d of store.listDocs(req.params.pid)) {
     const text = `${d.title || ''}\n${d.content || ''}`;
     const idx = text.toLowerCase().indexOf(q);
     if (idx === -1) continue;
@@ -427,9 +331,9 @@ function download(res, filename, mime, body) {
 }
 
 app.get('/api/projects/:pid/export.json', wrap(async (req, res) => {
-  const project = await loadProject(req.params.pid);
-  const canvases = await listCanvases(req.params.pid);
-  const documents = await listDocs(req.params.pid);
+  const project = mustProject(req.params.pid);
+  const canvases = store.listCanvases(project.id);
+  const documents = store.listDocs(project.id);
   download(
     res,
     `${project.name.replace(/[^\w-]+/g, '_')}.seton.json`,
@@ -439,9 +343,9 @@ app.get('/api/projects/:pid/export.json', wrap(async (req, res) => {
 }));
 
 app.get('/api/projects/:pid/export.md', wrap(async (req, res) => {
-  const project = await loadProject(req.params.pid);
-  const canvases = await listCanvases(req.params.pid);
-  const documents = await listDocs(req.params.pid);
+  const project = mustProject(req.params.pid);
+  const canvases = store.listCanvases(project.id);
+  const documents = store.listDocs(project.id);
   const parts = [projectToMarkdown(project, canvases)];
   for (const d of documents) {
     parts.push('---', '', `# ${d.title}`, '', d.content, '');
@@ -463,13 +367,13 @@ app.get('/api/projects/:pid/export.md', wrap(async (req, res) => {
 }));
 
 app.get('/api/projects/:pid/canvases/:cid/export.json', wrap(async (req, res) => {
-  const doc = await readJSON(canvasFile(req.params.pid, req.params.cid));
+  const doc = mustCanvas(req.params.pid, req.params.cid);
   download(res, `${doc.name.replace(/[^\w-]+/g, '_')}.canvas.json`,
     'application/json', JSON.stringify(doc, null, 2));
 }));
 
 app.get('/api/projects/:pid/canvases/:cid/export.md', wrap(async (req, res) => {
-  const doc = await readJSON(canvasFile(req.params.pid, req.params.cid));
+  const doc = mustCanvas(req.params.pid, req.params.cid);
   download(res, `${doc.name.replace(/[^\w-]+/g, '_')}.md`,
     'text/markdown', canvasToMarkdown(doc));
 }));
@@ -479,27 +383,27 @@ app.get('/api/projects/:pid/canvases/:cid/export.md', wrap(async (req, res) => {
 app.post('/api/projects/import', wrap(async (req, res) => {
   const bundle = req.body;
   if (!bundle || bundle.format !== 'seton/v1' || !bundle.project) {
-    const err = new Error('not a seton/v1 bundle');
-    err.status = 400;
-    throw err;
+    throw httpError(400, 'not a seton/v1 bundle');
   }
-  const id = newId();
-  const dir = projDir(id);
-  await fs.mkdir(path.join(dir, 'canvases'), { recursive: true });
-  await fs.mkdir(path.join(dir, 'markdown'), { recursive: true });
   const now = Date.now();
-  const project = { ...bundle.project, id, name: `${bundle.project.name} (imported)`, updatedAt: now };
-  await writeJSON(path.join(dir, 'project.json'), project);
-  for (const c of bundle.canvases || []) {
-    await writeJSON(canvasFile(id, assertId(c.id, 'canvas id')), c);
-    await fs.writeFile(markdownFile(id, c.id), canvasToMarkdown(c), 'utf8');
-  }
-  if ((bundle.documents || []).length) {
-    await fs.mkdir(path.join(dir, 'documents'), { recursive: true });
-    for (const d of bundle.documents) {
-      await writeJSON(docFile(id, assertId(d.id, 'document id')), d);
+  const project = {
+    id: newId(),
+    name: `${bundle.project.name} (imported)`,
+    defaultCanvasId: bundle.project.defaultCanvasId ?? null,
+    createdAt: bundle.project.createdAt || now,
+    updatedAt: now,
+  };
+  store.transaction(() => {
+    store.createProject(project);
+    for (const c of bundle.canvases || []) {
+      assertId(c.id, 'canvas id');
+      store.saveCanvas(project.id, c, { touch: false });
     }
-  }
+    for (const d of bundle.documents || []) {
+      assertId(d.id, 'document id');
+      store.saveDoc(project.id, d, { touch: false });
+    }
+  });
   res.status(201).json(project);
 }));
 
@@ -521,5 +425,5 @@ app.use((err, _req, res, _next) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Seton server on http://localhost:${PORT} (data: ${DATA_DIR})`);
+  console.log(`Seton server on http://localhost:${PORT} (db: ${path.join(DATA_DIR, 'seton.db')})`);
 });

@@ -26,8 +26,18 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   const [focusReq, setFocusReq] = useState(null); // {canvasId, nodeId, ts}
   const [addingDoc, setAddingDoc] = useState(false);
   const [editing, setEditing] = useState(null); // {type:'project'|'canvas'|'doc', id, value}
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => localStorage.getItem('seton:sidebarOpen') !== '0'
+  );
   const [toast, setToast] = useState(null);
   const toastTimer = useRef(null);
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen((v) => {
+      localStorage.setItem('seton:sidebarOpen', v ? '0' : '1');
+      return !v;
+    });
+  }, []);
 
   const showToast = useCallback((msg) => {
     setToast(msg);
@@ -227,13 +237,16 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault();
         setPanel((p) => (p === 'search' ? null : 'search'));
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault();
+        toggleSidebar();
       } else if (e.key === 'Escape' && panel && !typing) {
         setPanel(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [panel]);
+  }, [panel, toggleSidebar]);
 
   if (!project) return <div className="loading">Loading project…</div>;
 
@@ -254,13 +267,22 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
 
   return (
     <div className="workspace">
-      <aside className="sidebar">
+      <aside className={`sidebar ${sidebarOpen ? '' : 'hidden'}`}>
         <div className="sidebar-top">
           <div className="sidebar-top-row">
             <button className="ghost small" onClick={onClose}>
               <Icon name="back" size={14} /> Projects
             </button>
-            <ThemeToggle theme={theme} onToggle={onToggleTheme} className="small" />
+            <span className="sidebar-top-actions">
+              <ThemeToggle theme={theme} onToggle={onToggleTheme} className="small" />
+              <button
+                className="ghost small"
+                onClick={toggleSidebar}
+                title="Hide sidebar (⌘B)"
+              >
+                <Icon name="panelLeft" size={14} />
+              </button>
+            </span>
           </div>
           {editing?.type === 'project' ? (
             <div className="project-name">{editInput}</div>
@@ -422,12 +444,24 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
             <span><kbd>n</kbd> new note</span>
             <span><kbd>e</kbd> edit</span>
             <span><kbd>⌘D</kbd> duplicate</span>
+            <span><kbd>l</kbd> link</span>
             <span><kbd>/</kbd> filter</span>
             <span><kbd>r</kbd> recall</span>
             <span><kbd>⌘F</kbd> search</span>
+            <span><kbd>⌘B</kbd> sidebar</span>
           </div>
         </div>
       </aside>
+
+      {!sidebarOpen && (
+        <button
+          className="sidebar-reveal"
+          onClick={toggleSidebar}
+          title="Show sidebar (⌘B)"
+        >
+          <Icon name="chevronRight" size={14} />
+        </button>
+      )}
 
       {panel === 'search' && (
         <SearchPanel

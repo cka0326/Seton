@@ -272,6 +272,7 @@ kbd {
   display: flex;
   height: 100%;
   overflow: hidden;
+  position: relative;
 }
 .sidebar {
   width: 232px;
@@ -283,6 +284,36 @@ kbd {
   padding: 10px;
   gap: 14px;
   overflow-y: auto;
+  transition: margin-left 0.22s ease, visibility 0s;
+}
+/* drawer: slide out of view (width + border), unfocusable while hidden */
+.sidebar.hidden {
+  margin-left: -233px;
+  visibility: hidden;
+  transition: margin-left 0.22s ease, visibility 0s 0.22s;
+}
+.sidebar-top-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.sidebar-reveal {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 30;
+  padding: 16px 3px 16px 2px;
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  background: var(--bg-2);
+  color: var(--muted);
+  box-shadow: var(--shadow-1);
+}
+.sidebar-reveal:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .sidebar-top .project-name {
   font-size: 16px;
