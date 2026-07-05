@@ -7,6 +7,7 @@ import DocumentReader from './DocumentReader.jsx';
 import AddDocModal from './AddDocModal.jsx';
 import Icon from './Icon.jsx';
 import { DEFAULT_NODE, HL_TO_NODE_COLOR } from '../constants.js';
+import { fmtDuration } from '../lib/time.js';
 
 const newId = (prefix) =>
   `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -385,7 +386,9 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
                   )}
                   <span
                     className={`doc-progress ${d.percent >= 100 ? 'done' : ''}`}
-                    title={`${d.percent}% read · ${d.highlightCount} highlights`}
+                    title={`${d.percent}% read · ${d.highlightCount} highlights${
+                      d.readSeconds ? ` · ${fmtDuration(d.readSeconds)} spent` : ''
+                    }`}
                   >
                     {d.percent >= 100 ? <Icon name="check" size={12} /> : `${d.percent}%`}
                   </span>

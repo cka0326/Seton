@@ -4,6 +4,11 @@ import Icon from './Icon.jsx';
 import { api } from '../api.js';
 import { HL_COLORS, HL_SWATCH } from '../constants.js';
 import { describeSelection, locate, paintHighlights } from '../lib/anchor.js';
+import { fmtDuration } from '../lib/time.js';
+
+const READ_TICK_MS = 5_000; // how often active reading time is counted
+const READ_IDLE_MS = 60_000; // no input for this long → the clock pauses
+const READ_SAVE_MS = 30_000; // how often accumulated time is persisted
 
 const newId = (prefix) =>
   `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -57,6 +62,13 @@ export default function DocumentReader({
   );
   const penRef = useRef(localStorage.getItem('seton:pen') || 'yellow');
 
+  // reading-time clock: base = persisted seconds, session = this visit
+  const [readSecs, setReadSecs] = useState(0);
+  const readBase = useRef(0);
+  const readSession = useRef(0);
+  const readSaved = useRef(0); // session seconds already persisted
+  const lastActivity = useRef(Date.now());
+
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const restoredRef = useRef(false);
@@ -75,6 +87,11 @@ export default function DocumentReader({
       .then((d) => {
         setDoc(d);
         setPercent(d.progress?.percent || 0);
+        readBase.current = d.progress?.readSeconds || 0;
+        readSession.current = 0;
+        readSaved.current = 0;
+        lastActivity.current = Date.now();
+        setReadSecs(readBase.current);
       })
       .catch((e) => setError(e.message));
   }, [projectId, docId]);
@@ -144,6 +161,49 @@ export default function DocumentReader({
     },
     [projectId, docId, onMetaChange]
   );
+
+  // Count active reading time. The clock ticks while the tab is visible and
+  // there was input (pointer, keys, wheel) within the last READ_IDLE_MS.
+  useEffect(() => {
+    const mark = () => { lastActivity.current = Date.now(); };
+    window.addEventListener('pointermove', mark, { passive: true });
+    window.addEventListener('pointerdown', mark, { passive: true });
+    window.addEventListener('keydown', mark, true);
+    window.addEventListener('wheel', mark, { passive: true });
+    const tick = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastActivity.current >= READ_IDLE_MS) return;
+      readSession.current += READ_TICK_MS / 1000;
+      setReadSecs(Math.round(readBase.current + readSession.current));
+    }, READ_TICK_MS);
+    return () => {
+      clearInterval(tick);
+      window.removeEventListener('pointermove', mark);
+      window.removeEventListener('pointerdown', mark);
+      window.removeEventListener('keydown', mark, true);
+      window.removeEventListener('wheel', mark);
+    };
+  }, []);
+
+  // Persist accumulated reading time. It rides on `progress`, which the
+  // server merges and which doesn't bump the document's updatedAt.
+  useEffect(() => {
+    const save = () => {
+      if (readSession.current <= readSaved.current) return;
+      readSaved.current = readSession.current;
+      api
+        .saveDoc(projectId, docId, {
+          progress: { readSeconds: Math.round(readBase.current + readSession.current) },
+        })
+        .then(() => onMetaChange?.())
+        .catch(() => {});
+    };
+    const t = setInterval(save, READ_SAVE_MS);
+    return () => {
+      clearInterval(t);
+      save(); // flush on unmount / doc switch
+    };
+  }, [projectId, docId, onMetaChange]);
 
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -347,6 +407,7 @@ export default function DocumentReader({
         />
         <span className="reader-meta muted small">
           {words.toLocaleString()} words · ~{Math.max(1, Math.round(words / 220))} min · {percent}% read
+          <span title="Active time spent reading this document"> · {fmtDuration(readSecs)} spent</span>
         </span>
         <span className="tb-sep" />
         <div className="font-stepper" title="Reading font size">

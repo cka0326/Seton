@@ -60,6 +60,7 @@ const docSummary = (d) => ({
   highlightCount: (d.highlights || []).length,
   percent: d.progress?.percent || 0,
   lastReadAt: d.progress?.lastReadAt || null,
+  readSeconds: d.progress?.readSeconds || 0,
 });
 
 // Title fallback: first markdown heading, else first non-empty line.

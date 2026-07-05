@@ -24,6 +24,18 @@ export default function NoteEdge({
 
   return (
     <>
+      {/* halo behind the selected edge so it stays traceable where it
+          crosses nodes (selection also elevates it above the node layer) */}
+      {selected && (
+        <path
+          d={path}
+          fill="none"
+          stroke="var(--bg)"
+          strokeWidth={8}
+          strokeOpacity={0.85}
+          strokeLinecap="round"
+        />
+      )}
       <BaseEdge
         id={id}
         path={path}

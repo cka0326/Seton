@@ -56,10 +56,44 @@ function nodeMatches(node, q) {
     .includes(q);
 }
 
+const nodeSize = (n) => ({
+  w: n.width || n.measured?.width || DEFAULT_NODE.width,
+  h: n.height || n.measured?.height || DEFAULT_NODE.height,
+});
+const nodeCenter = (n) => {
+  const { w, h } = nodeSize(n);
+  return { x: n.position.x + w / 2, y: n.position.y + h / 2 };
+};
+
+// Pick the pair of handles on the sides facing each other, so edges leave and
+// enter nodes where you'd expect instead of wrapping around them.
+function facingHandles(source, target) {
+  const cs = nodeCenter(source);
+  const ct = nodeCenter(target);
+  const dx = ct.x - cs.x;
+  const dy = ct.y - cs.y;
+  return Math.abs(dx) >= Math.abs(dy)
+    ? dx >= 0 ? ['r', 'l'] : ['l', 'r']
+    : dy >= 0 ? ['b', 't'] : ['t', 'b'];
+}
+
+// Re-anchor all edges to the facing sides of their (re)positioned nodes.
+function retargetEdges(nodes, edges) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  return edges.map((e) => {
+    const s = byId.get(e.source);
+    const t = byId.get(e.target);
+    if (!s || !t) return e;
+    const [sh, th] = facingHandles(s, t);
+    if (e.sourceHandle === sh && e.targetHandle === th) return e;
+    return { ...e, sourceHandle: sh, targetHandle: th };
+  });
+}
+
 // Hierarchical auto-layout using dagre. Returns nodes with new positions.
 function layoutNodes(nodes, edges, direction = 'TB') {
   const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: direction, nodesep: 55, ranksep: 90, marginx: 40, marginy: 40 });
+  g.setGraph({ rankdir: direction, nodesep: 70, ranksep: 120, marginx: 40, marginy: 40 });
   g.setDefaultEdgeLabel(() => ({}));
   for (const n of nodes) {
     g.setNode(n.id, {
@@ -256,10 +290,6 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
     const order = selectedRef.current.nodes;
     if (order.length < 2) return;
     const byId = new Map(latest.current.nodes.map((n) => [n.id, n]));
-    const center = (n) => ({
-      x: n.position.x + (n.width || n.measured?.width || DEFAULT_NODE.width) / 2,
-      y: n.position.y + (n.height || n.measured?.height || DEFAULT_NODE.height) / 2,
-    });
     setEdges((es) => {
       const linked = new Set(es.map((e) => `${e.source}→${e.target}`));
       const added = [];
@@ -269,12 +299,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
         if (!s || !t) continue;
         if (linked.has(`${s.id}→${t.id}`) || linked.has(`${t.id}→${s.id}`)) continue;
         // attach to the sides facing each other so the chain reads cleanly
-        const dx = center(t).x - center(s).x;
-        const dy = center(t).y - center(s).y;
-        const [sh, th] =
-          Math.abs(dx) >= Math.abs(dy)
-            ? dx >= 0 ? ['r', 'l'] : ['l', 'r']
-            : dy >= 0 ? ['b', 't'] : ['t', 'b'];
+        const [sh, th] = facingHandles(s, t);
         linked.add(`${s.id}→${t.id}`);
         added.push({
           id: newId('e'),
@@ -292,7 +317,11 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
 
   const autoLayout = useCallback(
     (direction = 'TB') => {
-      setNodes((ns) => layoutNodes(ns, latest.current.edges, direction));
+      const laid = layoutNodes(latest.current.nodes, latest.current.edges, direction);
+      setNodes(laid);
+      // edges keep whatever anchors they were drawn with; after moving every
+      // node those anchors are stale, so re-route each edge to facing sides
+      setEdges((es) => retargetEdges(laid, es));
       requestAnimationFrame(() =>
         rf.fitView({ padding: 0.2, duration: 500 })
       );
@@ -548,6 +577,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
           onNodeDoubleClick={(_e, node) => setMaxNodeId(node.id)}
           onPaneClick={onPaneClick}
           connectionMode={ConnectionMode.Loose}
+          elevateEdgesOnSelect
           zoomOnDoubleClick={false}
           deleteKeyCode={null}
           multiSelectionKeyCode={['Meta', 'Shift']}
