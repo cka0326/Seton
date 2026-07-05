@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import ThemeToggle from './ThemeToggle.jsx';
+import Icon from './Icon.jsx';
 
 export default function ProjectList({ onOpen, theme, onToggleTheme }) {
   const [projects, setProjects] = useState(null);
@@ -49,7 +50,14 @@ export default function ProjectList({ onOpen, theme, onToggleTheme }) {
           <h1 className="logo">Seton</h1>
           <ThemeToggle theme={theme} onToggle={onToggleTheme} />
         </div>
-        <p className="tagline">Learn, revise and retain — on an infinite canvas.</p>
+        <p className="tagline">
+          Your second brain for technical learning — read, highlight, connect.
+        </p>
+        <div className="home-features muted small">
+          <span><Icon name="book" size={13} /> Paste notes &amp; papers into a readable library</span>
+          <span><Icon name="highlighter" size={13} /> Highlight &amp; annotate while you study</span>
+          <span><Icon name="grid" size={13} /> Map concepts on an infinite canvas</span>
+        </div>
         {error && <div className="error">{error}</div>}
 
         <form className="new-project" onSubmit={create}>
@@ -65,7 +73,7 @@ export default function ProjectList({ onOpen, theme, onToggleTheme }) {
             onClick={() => fileRef.current?.click()}
             title="Import a .seton.json export"
           >
-            Import
+            <Icon name="upload" size={14} /> Import
           </button>
           <input
             ref={fileRef}
@@ -91,8 +99,9 @@ export default function ProjectList({ onOpen, theme, onToggleTheme }) {
                 <div className="project-card-name">{p.name}</div>
                 <div className="project-card-meta">
                   {p.canvasCount} canvas{p.canvasCount === 1 ? '' : 'es'} ·{' '}
-                  {p.noteCount} note{p.noteCount === 1 ? '' : 's'} · updated{' '}
-                  {new Date(p.updatedAt).toLocaleDateString()}
+                  {p.noteCount} note{p.noteCount === 1 ? '' : 's'}
+                  {p.docCount > 0 && <> · {p.docCount} doc{p.docCount === 1 ? '' : 's'}</>}
+                  {' '}· updated {new Date(p.updatedAt).toLocaleDateString()}
                 </div>
                 <button
                   className="ghost danger card-delete"

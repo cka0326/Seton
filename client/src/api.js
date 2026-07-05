@@ -18,8 +18,8 @@ export const api = {
   createProject: (name) =>
     req('/api/projects', { method: 'POST', body: JSON.stringify({ name }) }),
   getProject: (pid) => req(`/api/projects/${pid}`),
-  renameProject: (pid, name) =>
-    req(`/api/projects/${pid}`, { method: 'PUT', body: JSON.stringify({ name }) }),
+  updateProject: (pid, patch) =>
+    req(`/api/projects/${pid}`, { method: 'PUT', body: JSON.stringify(patch) }),
   deleteProject: (pid) => req(`/api/projects/${pid}`, { method: 'DELETE' }),
   getAll: (pid) => req(`/api/projects/${pid}/all`),
   importProject: (bundle) =>
@@ -38,6 +38,21 @@ export const api = {
     }),
   deleteCanvas: (pid, cid) =>
     req(`/api/projects/${pid}/canvases/${cid}`, { method: 'DELETE' }),
+
+  listDocs: (pid) => req(`/api/projects/${pid}/documents`),
+  createDoc: (pid, doc) =>
+    req(`/api/projects/${pid}/documents`, {
+      method: 'POST',
+      body: JSON.stringify(doc),
+    }),
+  getDoc: (pid, did) => req(`/api/projects/${pid}/documents/${did}`),
+  saveDoc: (pid, did, patch) =>
+    req(`/api/projects/${pid}/documents/${did}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  deleteDoc: (pid, did) =>
+    req(`/api/projects/${pid}/documents/${did}`, { method: 'DELETE' }),
 
   search: (pid, q) =>
     req(`/api/projects/${pid}/search?q=${encodeURIComponent(q)}`),

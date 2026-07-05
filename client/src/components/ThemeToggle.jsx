@@ -1,3 +1,5 @@
+import Icon from './Icon.jsx';
+
 export default function ThemeToggle({ theme, onToggle, className = '' }) {
   return (
     <button
@@ -6,7 +8,7 @@ export default function ThemeToggle({ theme, onToggle, className = '' }) {
       title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
       aria-label="Toggle color theme"
     >
-      {theme === 'dark' ? '☀️' : '🌙'}
+      <Icon name={theme === 'dark' ? 'sun' : 'moon'} />
     </button>
   );
 }

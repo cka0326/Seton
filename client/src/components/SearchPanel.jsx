@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
+import Icon from './Icon.jsx';
+
+const RESULT_ICON = { node: 'note', edge: 'send', doc: 'book' };
 
 export default function SearchPanel({ projectId, activeCanvasId, onJump, onClose }) {
   const [q, setQ] = useState('');
@@ -27,18 +30,20 @@ export default function SearchPanel({ projectId, activeCanvasId, onJump, onClose
 
   const visible =
     scope === 'canvas'
-      ? results.filter((r) => r.canvasId === activeCanvasId)
+      ? results.filter((r) => r.type === 'doc' || r.canvasId === activeCanvasId)
       : results;
 
   return (
     <aside className="drawer">
       <div className="drawer-head">
         <strong>Search</strong>
-        <button className="ghost" onClick={onClose}>✕</button>
+        <button className="ghost" onClick={onClose} title="Close (Esc)">
+          <Icon name="close" />
+        </button>
       </div>
       <input
         autoFocus
-        placeholder="Search titles, notes, tags, edge labels…"
+        placeholder="Search notes, documents, tags, edges…"
         value={q}
         onChange={(e) => setQ(e.target.value)}
       />
@@ -67,15 +72,17 @@ export default function SearchPanel({ projectId, activeCanvasId, onJump, onClose
         )}
         {visible.map((r, i) => (
           <button
-            key={`${r.canvasId}:${r.nodeId}:${i}`}
+            key={`${r.type}:${r.docId || r.canvasId}:${r.nodeId || ''}:${i}`}
             className="result"
-            onClick={() => onJump(r.canvasId, r.nodeId)}
+            onClick={() => onJump(r)}
           >
             <div className="result-title">
-              {r.type === 'edge' ? '↦ ' : ''}{r.title}
+              <Icon name={RESULT_ICON[r.type] || 'note'} size={13} /> {r.title}
             </div>
             <div className="result-snippet">{r.snippet}</div>
-            <div className="result-canvas">{r.canvasName}</div>
+            <div className="result-canvas">
+              {r.type === 'doc' ? 'Library' : r.canvasName}
+            </div>
           </button>
         ))}
       </div>

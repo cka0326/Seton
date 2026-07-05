@@ -35,8 +35,10 @@ function NoteNode({ data, selected }) {
         <span className="note-title">{data.title || 'Untitled'}</span>
       </div>
 
+      {/* nowheel: let the wheel scroll overflowing note content instead of
+          zooming the canvas */}
       <div
-        className="note-body"
+        className="note-body nowheel"
         style={{
           fontSize: data.fontSize || 14,
           textAlign: data.textAlign || 'left',

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import Markdown from './Markdown.jsx';
+import Icon from './Icon.jsx';
 import { KINDS, NODE_COLORS } from '../constants.js';
 
 export default function NoteModal({ node, onChange, onChangeDims, onDelete, onClose }) {
@@ -21,6 +22,8 @@ export default function NoteModal({ node, onChange, onChangeDims, onDelete, onCl
     textAlign: d.textAlign || 'left',
   };
 
+  const cardColor = NODE_COLORS[d.color] || NODE_COLORS.slate;
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -34,9 +37,12 @@ export default function NoteModal({ node, onChange, onChangeDims, onDelete, onCl
             autoFocus
           />
           <button className="ghost" onClick={() => setReading((v) => !v)}>
-            {reading ? '✏️ Edit' : '👁 Read'}
+            <Icon name={reading ? 'pencil' : 'bookOpen'} size={14} />{' '}
+            {reading ? 'Edit' : 'Read'}
           </button>
-          <button className="ghost" onClick={onClose} title="Close (Esc)">✕</button>
+          <button className="ghost" onClick={onClose} title="Close (Esc)">
+            <Icon name="close" />
+          </button>
         </div>
 
         {!reading && (
@@ -139,10 +145,25 @@ export default function NoteModal({ node, onChange, onChangeDims, onDelete, onCl
               onChange={(e) => onChange({ content: e.target.value })}
             />
           )}
-          <div className="modal-preview" style={previewStyle}>
-            <Markdown className="modal-md">
-              {d.content || '*Empty note — start typing on the left.*'}
-            </Markdown>
+          <div className="modal-preview">
+            <div className="note-preview-card" style={{ background: cardColor }}>
+              <div className="note-head">
+                <span className="note-kind" title={kind.label}>{kind.icon}</span>
+                <span className="note-title">{d.title || 'Untitled'}</span>
+              </div>
+              <div className="note-preview-body" style={previewStyle}>
+                <Markdown className="modal-md">
+                  {d.content || '*Empty note — start typing on the left.*'}
+                </Markdown>
+              </div>
+              {d.tags && d.tags.length > 0 && (
+                <div className="note-tags">
+                  {d.tags.map((t) => (
+                    <span key={t} className="tag">#{t}</span>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

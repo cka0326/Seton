@@ -19,6 +19,7 @@ import NoteNode from './NoteNode.jsx';
 import NoteEdge from './NoteEdge.jsx';
 import Inspector from './Inspector.jsx';
 import NoteModal from './NoteModal.jsx';
+import Icon from './Icon.jsx';
 import { api } from '../api.js';
 import { DEFAULT_NODE, KINDS, NODE_COLORS } from '../constants.js';
 import { RecallContext } from '../contexts.js';
@@ -430,14 +431,14 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
             onClick={() => autoLayout('TB')}
             title="Auto-arrange notes into a hierarchy (top-down)"
           >
-            ⤵<span className="btn-label"> Arrange</span>
+            <Icon name="layout" /><span className="btn-label"> Arrange</span>
           </button>
           <button
             className="ghost"
             onClick={() => autoLayout('LR')}
             title="Auto-arrange left-to-right"
           >
-            ⤷<span className="btn-label"> L→R</span>
+            <Icon name="layoutLR" /><span className="btn-label"> L→R</span>
           </button>
           <div className="spacer" />
           <input
@@ -452,21 +453,21 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
             onClick={() => setRecall((v) => !v)}
             title="Recall mode: blur note bodies, click a note to reveal (r)"
           >
-            🧠<span className="btn-label"> Recall</span>
+            <Icon name={recall ? 'eye' : 'eyeOff'} /><span className="btn-label"> Recall</span>
           </button>
           <a
             className="btn ghost"
             href={`/api/projects/${projectId}/canvases/${doc.id}/export.md`}
             title="Export this canvas as Markdown"
           >
-            ⬇ MD
+            <Icon name="download" /> MD
           </a>
           <a
             className="btn ghost"
             href={`/api/projects/${projectId}/canvases/${doc.id}/export.json`}
             title="Export this canvas as JSON"
           >
-            ⬇ JSON
+            <Icon name="download" /> JSON
           </a>
           <span className={`save-state ${saveState}`}>
             {saveState === 'saved' && '● saved'}
