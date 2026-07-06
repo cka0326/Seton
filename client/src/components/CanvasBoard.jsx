@@ -44,7 +44,8 @@ const newId = (prefix) =>
   `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 
 // strip volatile React Flow runtime props so they never hit disk / git
-const stripNode = ({ measured, selected, dragging, resizing, className, ...n }) => n;
+// (`hidden` is only ever set by the temporary trace/filter views)
+const stripNode = ({ measured, selected, dragging, resizing, className, hidden, ...n }) => n;
 const stripEdge = ({ selected, ...e }) => e;
 const serialize = (nodes, edges) =>
   JSON.stringify([nodes.map(stripNode), edges.map(stripEdge)]);
@@ -141,9 +142,20 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
   latest.current.name = canvasName || doc.name;
   const lastSaved = useRef(serialize(doc.nodes || [], doc.edges || []));
 
+  // While a temporary view (trace mode / filter results) is active this holds
+  // every node's real position; the view is display-only and must never be
+  // persisted, so saves map positions back through it.
+  const tempSaved = useRef(null); // Map<nodeId, {x, y}> | null
+
   const persist = useCallback(async () => {
     setSaveState('saving');
-    const cleanNodes = latest.current.nodes.map(stripNode);
+    const saved = tempSaved.current;
+    const sourceNodes = saved
+      ? latest.current.nodes.map((n) =>
+          saved.has(n.id) ? { ...n, position: saved.get(n.id) } : n
+        )
+      : latest.current.nodes;
+    const cleanNodes = sourceNodes.map(stripNode);
     const cleanEdges = latest.current.edges.map(stripEdge);
     try {
       await api.saveCanvas(projectId, {
@@ -165,6 +177,12 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
   useEffect(() => {
     if (firstRun.current) {
       firstRun.current = false;
+      return;
+    }
+    if (tempSaved.current) {
+      // temporary trace/filter layout — don't autosave the moved nodes; any
+      // real edits are flushed (with original positions) on exit or unmount
+      latest.current.dirty = true;
       return;
     }
     if (serialize(nodes, edges) === lastSaved.current) {
@@ -216,7 +234,147 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
     setSelCount(sn.length);
   }, []);
 
+  // ----- temporary views: trace mode & filter results -----------------------
+  // Both views reposition/hide nodes for navigation only. Real positions are
+  // captured once in tempSaved and put back by restoreLayout.
+
+  const [trace, setTrace] = useState(null); // null | { focusId: string|null }
+  const traceRef = useRef(null);
+  traceRef.current = trace;
+  const filterViewRef = useRef(false);
+
+  const captureOnce = useCallback(() => {
+    if (!tempSaved.current) {
+      tempSaved.current = new Map(latest.current.nodes.map((n) => [n.id, n.position]));
+    }
+  }, []);
+
+  const restoreLayout = useCallback(() => {
+    const saved = tempSaved.current;
+    tempSaved.current = null;
+    filterViewRef.current = false;
+    if (!saved) return;
+    setNodes((ns) =>
+      ns.map((n) => ({ ...n, hidden: false, position: saved.get(n.id) || n.position }))
+    );
+    requestAnimationFrame(() => rf.fitView({ padding: 0.2, duration: 450 }));
+  }, [rf]);
+
+  // Show only `focusId` and its direct connections: incoming notes stacked on
+  // the left, outgoing on the right, the focused note anchored at its real
+  // position. Clicking a neighbor re-traces from there (see onNodeClick).
+  const traceFocus = useCallback(
+    (focusId) => {
+      captureOnce();
+      const ns = latest.current.nodes;
+      const byId = new Map(ns.map((n) => [n.id, n]));
+      const focus = byId.get(focusId);
+      if (!focus) return;
+      const outgoing = new Set();
+      const incoming = new Set();
+      for (const e of latest.current.edges) {
+        if (e.source === focusId && e.target !== focusId) outgoing.add(e.target);
+        else if (e.target === focusId && e.source !== focusId) incoming.add(e.source);
+      }
+      for (const id of outgoing) incoming.delete(id); // both ways → right side
+
+      const anchor = tempSaved.current.get(focusId) || focus.position;
+      const { w: fw, h: fh } = nodeSize(focus);
+      const centerY = anchor.y + fh / 2;
+      const GAP = 48;
+      const COL = 150; // gap between the focus card and each column
+      const place = (ids, side) => {
+        const arr = [...ids].map((id) => byId.get(id)).filter(Boolean);
+        const total =
+          arr.reduce((s, n) => s + nodeSize(n).h, 0) + GAP * Math.max(0, arr.length - 1);
+        let y = centerY - total / 2;
+        const pos = new Map();
+        for (const n of arr) {
+          const { w, h } = nodeSize(n);
+          pos.set(n.id, { x: side === 'right' ? anchor.x + fw + COL : anchor.x - COL - w, y });
+          y += h + GAP;
+        }
+        return pos;
+      };
+      const placed = new Map([...place(incoming, 'left'), ...place(outgoing, 'right')]);
+      placed.set(focusId, anchor);
+
+      setNodes((prev) =>
+        prev.map((n) =>
+          placed.has(n.id)
+            ? { ...n, hidden: false, position: placed.get(n.id), selected: n.id === focusId }
+            : { ...n, hidden: true, selected: false }
+        )
+      );
+      requestAnimationFrame(() =>
+        rf.fitView({
+          padding: 0.3,
+          duration: 450,
+          nodes: [...placed.keys()].map((id) => ({ id })),
+        })
+      );
+    },
+    [captureOnce, rf]
+  );
+
+  const enterTrace = useCallback(() => {
+    setFilter('');
+    const start = selNodeIdRef.current;
+    setTrace({ focusId: start || null });
+    if (start) {
+      filterViewRef.current = false; // trace takes over any filter capture
+      traceFocus(start);
+    } else if (filterViewRef.current) {
+      restoreLayout(); // waiting for a click — show the real canvas
+    }
+  }, [traceFocus, restoreLayout]);
+
+  const exitTrace = useCallback(() => {
+    setTrace(null);
+    restoreLayout(); // no-op when nothing was repositioned
+  }, [restoreLayout]);
+
+  // Filter results view: gather matching notes into a compact grid and hide
+  // the rest — far easier to scan on large canvases than fading non-matches.
+  const applyFilterView = useCallback(
+    (query) => {
+      captureOnce();
+      filterViewRef.current = true;
+      const matches = latest.current.nodes.filter((n) => nodeMatches(n, query));
+      const cols = Math.max(1, Math.ceil(Math.sqrt(matches.length)));
+      let cw = 0;
+      let ch = 0;
+      for (const n of matches) {
+        const s = nodeSize(n);
+        cw = Math.max(cw, s.w);
+        ch = Math.max(ch, s.h);
+      }
+      const pos = new Map();
+      matches.forEach((n, i) => {
+        pos.set(n.id, { x: (i % cols) * (cw + 60), y: Math.floor(i / cols) * (ch + 60) });
+      });
+      setNodes((prev) =>
+        prev.map((n) =>
+          pos.has(n.id)
+            ? { ...n, hidden: false, position: pos.get(n.id) }
+            : { ...n, hidden: true }
+        )
+      );
+      if (matches.length) {
+        requestAnimationFrame(() =>
+          rf.fitView({
+            padding: 0.25,
+            duration: 400,
+            nodes: matches.map((m) => ({ id: m.id })),
+          })
+        );
+      }
+    },
+    [captureOnce, rf]
+  );
+
   const addNoteAt = useCallback((kind, position) => {
+    if (traceRef.current) return; // no new notes while navigating a trace
     const id = newId('n');
     const node = {
       id,
@@ -317,7 +475,14 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
 
   const autoLayout = useCallback(
     (direction = 'TB') => {
-      const laid = layoutNodes(latest.current.nodes, latest.current.edges, direction);
+      // arranging commits a real layout — leave any temporary view first so
+      // the arrange isn't reverted by its restore
+      if (traceRef.current) setTrace(null);
+      tempSaved.current = null;
+      filterViewRef.current = false;
+      setFilter('');
+      const laid = layoutNodes(latest.current.nodes, latest.current.edges, direction)
+        .map((n) => ({ ...n, hidden: false }));
       setNodes(laid);
       // edges keep whatever anchors they were drawn with; after moving every
       // node those anchors are stale, so re-route each edge to facing sides
@@ -362,12 +527,24 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
       if (e.key === 'Escape') {
         if (typing) {
           el.blur();
-        } else if (!maxNodeIdRef.current) {
-          // let the maximized-note modal handle its own Escape
-          e.stopPropagation(); // stop React Flow from re-selecting the focused node
-          if (filter) setFilter('');
-          deselectAll();
+          return;
         }
+        if (maxNodeIdRef.current) return; // maximized-note modal handles its own Escape
+        e.stopPropagation(); // stop React Flow from re-selecting the focused node
+        if (traceRef.current) {
+          if (traceRef.current.focusId) {
+            // step 1: leave the traced node, stay armed for the next click
+            setTrace({ focusId: null });
+            restoreLayout();
+          } else {
+            // step 2: leave trace mode entirely
+            setTrace(null);
+          }
+          deselectAll();
+          return;
+        }
+        if (filter) setFilter('');
+        deselectAll();
         return;
       }
 
@@ -379,6 +556,11 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
         e.preventDefault();
         if (selNodes.size) {
           setNodes((ns) => ns.filter((n) => !selNodes.has(n.id)));
+          if (traceRef.current?.focusId && selNodes.has(traceRef.current.focusId)) {
+            // the traced node is gone — fall back to the full canvas
+            setTrace({ focusId: null });
+            restoreLayout();
+          }
         }
         setEdges((es) =>
           es.filter(
@@ -409,6 +591,9 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
         filterRef.current?.focus();
       } else if (e.key === 'r') {
         setRecall((v) => !v);
+      } else if (e.key === 't') {
+        if (traceRef.current) exitTrace();
+        else enterTrace();
       } else if (e.key === 'l') {
         linkSelection();
       } else if (e.key === 'e' || e.key === 'Enter') {
@@ -419,17 +604,22 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
     // edge/node accessibility handler consumes the event
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [addNote, deselectAll, duplicateSelection, linkSelection, filter]);
+  }, [addNote, deselectAll, duplicateSelection, linkSelection, filter, enterTrace, exitTrace, restoreLayout]);
 
   // focus a node requested from search results
   useEffect(() => {
     if (!focusRequest) return;
-    const node = latest.current.nodes.find((n) => n.id === focusRequest.nodeId);
-    if (!node) return;
-    const w = node.width || node.measured?.width || DEFAULT_NODE.width;
-    const h = node.height || node.measured?.height || DEFAULT_NODE.height;
-    // wait a frame so the pane is measured before centering
+    // a temporary trace/filter view would hide or misplace the target
+    if (traceRef.current) setTrace(null);
+    if (tempSaved.current) restoreLayout();
+    // wait a frame so restored positions and pane measurements are in
     const raf = requestAnimationFrame(() => {
+      const node = latest.current.nodes.find((n) => n.id === focusRequest.nodeId);
+      if (!node) {
+        onFocusHandled?.();
+        return;
+      }
+      const { w, h } = nodeSize(node);
       rf.setCenter(node.position.x + w / 2, node.position.y + h / 2, {
         zoom: 1.05,
         duration: 500,
@@ -440,7 +630,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
       onFocusHandled?.();
     });
     return () => cancelAnimationFrame(raf);
-  }, [focusRequest, rf, onFocusHandled]);
+  }, [focusRequest, rf, onFocusHandled, restoreLayout]);
 
   const updateNodeData = useCallback((id, patch) => {
     setNodes((ns) =>
@@ -475,13 +665,19 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
   }, []);
 
   const q = filter.trim().toLowerCase();
-  const displayNodes = useMemo(() => {
-    if (!q) return nodes;
-    return nodes.map((n) => ({
-      ...n,
-      className: nodeMatches(n, q) ? 'filter-hit' : 'filter-miss',
-    }));
-  }, [nodes, q]);
+
+  // filter → temporary results view (debounced so it doesn't thrash per key)
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (q) {
+        if (traceRef.current) setTrace(null); // typing a filter leaves trace mode
+        applyFilterView(q);
+      } else if (filterViewRef.current) {
+        restoreLayout();
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [q, applyFilterView, restoreLayout]);
 
   const selNode = selNodeId ? nodes.find((n) => n.id === selNodeId) : null;
   const selEdge = !selNode && selEdgeId ? edges.find((e) => e.id === selEdgeId) : null;
@@ -534,6 +730,13 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
           >
             <Icon name="link" /><span className="btn-label"> Link</span>
           </button>
+          <button
+            className={`ghost ${trace ? 'active' : ''}`}
+            onClick={() => (trace ? exitTrace() : enterTrace())}
+            title="Trace mode: click a note to see just its connections, laid out around it (t)"
+          >
+            <Icon name="route" /><span className="btn-label"> Trace</span>
+          </button>
           <div className="spacer" />
           <input
             ref={filterRef}
@@ -572,7 +775,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
         </div>
 
         <ReactFlow
-          nodes={displayNodes}
+          nodes={nodes}
           edges={edges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
@@ -581,6 +784,14 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onSelectionChange={onSelectionChange}
+          onNodeClick={(e, node) => {
+            // plain click walks the trace; modified clicks keep multi-select
+            if (e.shiftKey || e.metaKey || e.ctrlKey) return;
+            if (traceRef.current && traceRef.current.focusId !== node.id) {
+              setTrace({ focusId: node.id });
+              traceFocus(node.id);
+            }
+          }}
           onNodeDoubleClick={(_e, node) => setMaxNodeId(node.id)}
           onPaneClick={onPaneClick}
           connectionMode={ConnectionMode.Loose}
@@ -604,6 +815,23 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
             }
           />
         </ReactFlow>
+
+        {trace && (
+          <div className="trace-banner">
+            <Icon name="route" size={13} />
+            {trace.focusId ? (
+              <span>
+                Tracing{' '}
+                <strong>
+                  {nodes.find((n) => n.id === trace.focusId)?.data?.title || 'note'}
+                </strong>
+                {' '}— in on the left, out on the right · click a note to walk · Esc to step back
+              </span>
+            ) : (
+              <span>Trace mode — click a note to see its connections · Esc to exit</span>
+            )}
+          </div>
+        )}
 
         {selEdge && (
           <Inspector

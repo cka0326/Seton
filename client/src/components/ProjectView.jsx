@@ -502,6 +502,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
             <span><kbd>l</kbd> link</span>
             <span><kbd>/</kbd> filter</span>
             <span><kbd>r</kbd> recall</span>
+            <span><kbd>t</kbd> trace</span>
             <span><kbd>⌘F</kbd> search</span>
             <span><kbd>⌘B</kbd> sidebar</span>
           </div>
