@@ -23,6 +23,22 @@ npm run build
 npm start          # open http://localhost:4517
 ```
 
+## Mac app
+
+Seton also runs as a native Mac app (Electron shell around the same
+server + client — see `desktop/`):
+
+```bash
+npm run app        # dev: build client, launch the app against ./data
+npm run dist       # package: release/Seton-<version>-arm64.dmg + Seton.app
+```
+
+The packaged app starts its own server on a free port (no clash with
+`npm run dev`) and keeps its data in
+`~/Library/Application Support/Seton/data`. Google Drive sync works the
+same as in dev — on first launch with an empty database it restores your
+projects from the Drive folder.
+
 ## Features
 
 **Canvas & notes**

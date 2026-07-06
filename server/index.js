@@ -439,7 +439,10 @@ app.use((err, _req, res, _next) => {
   res.status(status).json({ error: err.message || 'internal error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Seton server on http://localhost:${PORT} (db: ${path.join(DATA_DIR, 'seton.db')})`);
+// Exported so the desktop app (desktop/main.js) can wait for "listening" and
+// read the real port — it starts us with PORT=0 to grab any free one.
+export const server = app.listen(PORT, () => {
+  const { port } = server.address();
+  console.log(`Seton server on http://localhost:${port} (db: ${path.join(DATA_DIR, 'seton.db')})`);
   if (sync.enabled) console.log(`Drive sync: mirroring projects to ${sync.dir}`);
 });
