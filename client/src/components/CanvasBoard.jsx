@@ -813,6 +813,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, onOpe
           onPaneClick={onPaneClick}
           onInit={onInit}
           connectionMode={ConnectionMode.Loose}
+          connectionRadius={40}
           elevateEdgesOnSelect
           zoomOnDoubleClick={false}
           deleteKeyCode={null}

@@ -663,17 +663,40 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
 .trace-banner .icon { color: var(--accent); flex-shrink: 0; }
 .trace-banner strong { color: var(--accent); }
 
-/* handles */
+/* handles — a small visible dot inside a much larger invisible hit area, so
+   starting a connection doesn't require pixel-perfect aim (issue #25) */
 .note-node .react-flow__handle,
 .react-flow__node .react-flow__handle {
-  width: 9px;
-  height: 9px;
-  background: var(--accent);
-  border: 2px solid var(--bg);
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
   opacity: 0;
   transition: opacity 0.12s;
 }
-.react-flow__node:hover .react-flow__handle { opacity: 1; }
+.react-flow__node .react-flow__handle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  box-sizing: border-box;
+  transition: width 0.1s, height 0.1s;
+}
+.react-flow__node .react-flow__handle:hover::after {
+  width: 17px;
+  height: 17px;
+}
+.react-flow__node:hover .react-flow__handle,
+.react-flow__node.selected .react-flow__handle {
+  opacity: 1;
+}
 
 /* edge label */
 .edge-label {
