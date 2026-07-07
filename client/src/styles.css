@@ -578,6 +578,18 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   align-items: center;
   flex-shrink: 0;
   opacity: 0.55;
+  background: none;
+  border: none;
+  padding: 2px;
+  margin: -2px;
+  border-radius: 5px;
+  color: inherit;
+  cursor: pointer;
+}
+.note-link-flag:hover {
+  opacity: 1;
+  border-color: transparent;
+  color: var(--accent);
 }
 .note-title {
   font-weight: 650;
@@ -1187,6 +1199,21 @@ mark.hl.hl-flash { animation: hl-flash 1.2s ease-out; }
   transition: opacity 0.12s;
 }
 .hl-card:hover .hl-card-actions { opacity: 1; }
+
+/* inline quick-edit: click a card to edit its note & color in the panel */
+.hl-card.selected {
+  background: var(--bg-3);
+  outline: 1px solid var(--accent-dim);
+}
+.hl-card.selected .hl-card-actions { opacity: 1; }
+.hl-card-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  cursor: default;
+}
+.hl-card-edit .hl-note-input { min-height: 48px; }
 
 /* selection / annotation popover */
 .hl-popover {

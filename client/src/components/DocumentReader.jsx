@@ -45,6 +45,7 @@ export default function DocumentReader({
   projectId,
   docId,
   initialScrollTop = null,
+  focusHlId = null,
   scrollPosRef,
   onBack,
   onDeleted,
@@ -60,6 +61,7 @@ export default function DocumentReader({
   const [activeHead, setActiveHead] = useState(0);
   const [percent, setPercent] = useState(0);
   const [popover, setPopover] = useState(null); // {mode:'new'|'edit', ...}
+  const [selHlId, setSelHlId] = useState(null); // card being edited inline in the panel
   const [fontSize, setFontSize] = useState(
     () => Number(localStorage.getItem('seton:readerFont')) || 17
   );
@@ -142,18 +144,31 @@ export default function DocumentReader({
     }
   }, [doc?.content, doc?.highlights, doc]);
 
-  // restore the reading position once per document — an exact offset when
-  // returning from the canvas, the saved progress ratio otherwise
+  // restore the reading position once per document — centered on a requested
+  // highlight (link from a canvas note), at an exact offset when returning
+  // from the canvas, or at the saved progress ratio otherwise
   useLayoutEffect(() => {
     if (!doc || restoredRef.current || !scrollRef.current) return;
     restoredRef.current = true;
     const el = scrollRef.current;
-    el.scrollTop =
-      initialScrollTop != null
-        ? initialScrollTop
-        : (doc.progress?.scroll || 0) * (el.scrollHeight - el.clientHeight);
+    const mark =
+      focusHlId && contentRef.current?.querySelector(`mark[data-hl="${focusHlId}"]`);
+    if (mark) {
+      const top =
+        mark.getBoundingClientRect().top -
+        el.getBoundingClientRect().top -
+        el.clientHeight / 2;
+      el.scrollTo({ top, behavior: 'instant' });
+      mark.classList.add('hl-flash');
+      setTimeout(() => mark.classList.remove('hl-flash'), 1200);
+    } else {
+      el.scrollTop =
+        initialScrollTop != null
+          ? initialScrollTop
+          : (doc.progress?.scroll || 0) * (el.scrollHeight - el.clientHeight);
+    }
     if (scrollPosRef) scrollPosRef.current = el.scrollTop;
-  }, [doc, initialScrollTop, scrollPosRef]);
+  }, [doc, initialScrollTop, focusHlId, scrollPosRef]);
 
   const hlTimer = useRef(null);
   const saveHighlights = useCallback(
@@ -294,15 +309,20 @@ export default function DocumentReader({
 
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape' && popover) {
+      if (e.key !== 'Escape') return;
+      if (popover) {
         e.stopPropagation();
         setPopover(null);
         window.getSelection()?.removeAllRanges();
+      } else if (selHlId) {
+        e.stopPropagation();
+        e.target?.blur?.();
+        setSelHlId(null);
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [popover]);
+  }, [popover, selHlId]);
 
   const addHighlight = (color, { openNote = false, send = false } = {}) => {
     const { sel } = popover;
@@ -337,6 +357,7 @@ export default function DocumentReader({
   const removeHl = (id) => {
     saveHighlights((doc.highlights || []).filter((h) => h.id !== id));
     setPopover(null);
+    setSelHlId((s) => (s === id ? null : s));
   };
 
   // Title of the outline section (nearest preceding heading) a highlight
@@ -422,7 +443,7 @@ export default function DocumentReader({
   return (
     <div className="reader">
       <header className="reader-head">
-        <button className="ghost" onClick={onBack} title="Back to canvas">
+        <button className="ghost" onClick={onBack} title="Back to canvas (⌘E)">
           <Icon name="back" />
           <span className="btn-label">Canvas</span>
         </button>
@@ -528,63 +549,92 @@ export default function DocumentReader({
                 thinking — everything is saved with the document.
               </p>
             )}
-            {highlights.map((h) => (
-              <div
-                key={h.id}
-                className={`hl-card pen-${h.color}`}
-                onClick={() => jumpToHl(h.id)}
-              >
-                <blockquote>{h.quote}</blockquote>
-                {h.note ? (
-                  <p className="hl-note">{h.note}</p>
-                ) : (
-                  <p className="hl-note muted">No note yet</p>
-                )}
-                <div className="hl-card-actions">
-                  <button
-                    className="ghost tiny"
-                    title="Edit note"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      jumpToHl(h.id);
-                      const mark = contentRef.current?.querySelector(
-                        `mark[data-hl="${h.id}"]`
-                      );
-                      if (mark) {
-                        setPopover({
-                          mode: 'edit',
-                          hlId: h.id,
-                          ...popoverPosition(mark.getBoundingClientRect()),
-                        });
-                      }
-                    }}
-                  >
-                    <Icon name="pencil" size={13} />
-                  </button>
-                  <button
-                    className="ghost tiny"
-                    title="Send to canvas as a note"
-                    onClick={(e) => { e.stopPropagation(); sendHl(h); }}
-                  >
-                    <Icon name="send" size={13} />
-                  </button>
-                  <button
-                    className="ghost tiny"
-                    title="View in canvas — jump to this highlight's note"
-                    onClick={(e) => { e.stopPropagation(); viewHl(h); }}
-                  >
-                    <Icon name="grid" size={13} />
-                  </button>
-                  <button
-                    className="ghost tiny danger"
-                    title="Remove highlight"
-                    onClick={(e) => { e.stopPropagation(); removeHl(h.id); }}
-                  >
-                    <Icon name="trash" size={13} />
-                  </button>
+            {highlights.map((h) => {
+              const isSel = h.id === selHlId;
+              return (
+                <div
+                  key={h.id}
+                  className={`hl-card pen-${h.color} ${isSel ? 'selected' : ''}`}
+                  title={isSel ? undefined : 'Click to edit · double-click to show in the text'}
+                  onClick={() => {
+                    setSelHlId(h.id);
+                    setPopover(null);
+                  }}
+                  onDoubleClick={() => jumpToHl(h.id)}
+                >
+                  <blockquote>{h.quote}</blockquote>
+                  {isSel ? (
+                    <div
+                      className="hl-card-edit"
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="hl-popover-row">
+                        {HL_COLORS.map((c) => (
+                          <button
+                            key={c}
+                            className={`pen-dot ${h.color === c ? 'selected' : ''}`}
+                            style={{ background: HL_SWATCH[c] }}
+                            title={`Recolor ${c}`}
+                            onClick={() => updateHl(h.id, { color: c })}
+                          />
+                        ))}
+                        <span className="spacer" />
+                        <button
+                          className="ghost tiny"
+                          title="Done (Esc)"
+                          onClick={() => setSelHlId(null)}
+                        >
+                          <Icon name="check" size={13} />
+                        </button>
+                      </div>
+                      <textarea
+                        className="hl-note-input"
+                        placeholder="Your annotation… (why does this matter?)"
+                        value={h.note}
+                        autoFocus
+                        rows={3}
+                        onChange={(e) => updateHl(h.id, { note: e.target.value })}
+                      />
+                    </div>
+                  ) : h.note ? (
+                    <p className="hl-note">{h.note}</p>
+                  ) : (
+                    <p className="hl-note muted">No note yet</p>
+                  )}
+                  <div className="hl-card-actions">
+                    <button
+                      className="ghost tiny"
+                      title="Show in the text"
+                      onClick={(e) => { e.stopPropagation(); jumpToHl(h.id); }}
+                    >
+                      <Icon name="eye" size={13} />
+                    </button>
+                    <button
+                      className="ghost tiny"
+                      title="Send to canvas as a note"
+                      onClick={(e) => { e.stopPropagation(); sendHl(h); }}
+                    >
+                      <Icon name="send" size={13} />
+                    </button>
+                    <button
+                      className="ghost tiny"
+                      title="View in canvas — jump to this highlight's note"
+                      onClick={(e) => { e.stopPropagation(); viewHl(h); }}
+                    >
+                      <Icon name="grid" size={13} />
+                    </button>
+                    <button
+                      className="ghost tiny danger"
+                      title="Remove highlight"
+                      onClick={(e) => { e.stopPropagation(); removeHl(h.id); }}
+                    >
+                      <Icon name="trash" size={13} />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </aside>
         )}
       </div>

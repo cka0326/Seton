@@ -27,6 +27,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   const [focusReq, setFocusReq] = useState(null); // {canvasId, nodeId, ts}
   const [returnTo, setReturnTo] = useState(null); // {docId, scrollTop} — reading spot to go back to
   const [initScroll, setInitScroll] = useState(null); // {docId, top} — exact restore on next reader open
+  const [initHl, setInitHl] = useState(null); // {docId, hlId} — open the reader at this highlight
   const readerScroll = useRef(0); // live scroll offset inside the open reader
   const [addingDoc, setAddingDoc] = useState(false);
   const [editing, setEditing] = useState(null); // {type:'project'|'canvas'|'doc', id, value}
@@ -127,6 +128,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
 
   const openDoc = (did, at = null) => {
     setInitScroll(at != null ? { docId: did, top: at } : null);
+    setInitHl(null);
     setOpenDocId(did);
   };
 
@@ -230,10 +232,9 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
     const title =
       section?.trim() ||
       words.slice(0, 7).join(' ') + (words.length > 7 ? '…' : '');
+    // the source doc is kept internally (data.source + tag), not in the body
     const content =
-      `> ${quote.trim()}` +
-      (note?.trim() ? `\n\n${note.trim()}` : '') +
-      (docTitle ? `\n\n— *${docTitle}*` : '');
+      `> ${quote.trim()}` + (note?.trim() ? `\n\n${note.trim()}` : '');
     const name = p.canvases.find((c) => c.id === cid)?.name || 'canvas';
 
     const existing =
@@ -304,7 +305,20 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
     openCanvas(target.canvasId);
   }, [projectId, openDocId, sendToCanvas]);
 
-  // Esc closes the open Search panel; Cmd/Ctrl+F toggles it.
+  // Link icon on a canvas note → the annotation it mirrors, opened in the reader.
+  const openSourceHl = useCallback((source) => {
+    if (!source?.docId) return;
+    if (!docs.some((d) => d.id === source.docId)) {
+      showToast('The source document is no longer in this project');
+      return;
+    }
+    setInitScroll(null);
+    setInitHl({ docId: source.docId, hlId: source.hlId });
+    setOpenDocId(source.docId);
+  }, [docs, showToast]);
+
+  // Esc closes the open Search panel; Cmd/Ctrl+F toggles it. Cmd/Ctrl+E hops
+  // between the reader and the canvas (issue #22), restoring the reading spot.
   useEffect(() => {
     const onKey = (e) => {
       const el = e.target;
@@ -316,13 +330,17 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
       } else if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
         e.preventDefault();
         toggleSidebar();
+      } else if ((e.metaKey || e.ctrlKey) && e.key === 'e') {
+        e.preventDefault();
+        if (openDocId) openCanvas(activeCid);
+        else if (returnTo && docs.some((d) => d.id === returnTo.docId)) returnToNote();
       } else if (e.key === 'Escape' && panel && !typing) {
         setPanel(null);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [panel, toggleSidebar]);
+  }, [panel, toggleSidebar, openDocId, activeCid, returnTo, docs]);
 
   if (!project) return <div className="loading">Loading project…</div>;
 
@@ -548,6 +566,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
             <span><kbd>t</kbd> trace</span>
             <span><kbd>⌘F</kbd> search</span>
             <span><kbd>⌘B</kbd> sidebar</span>
+            <span><kbd>⌘E</kbd> note ⇄ canvas</span>
           </div>
         </div>
       </aside>
@@ -578,6 +597,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
             projectId={projectId}
             docId={openDocId}
             initialScrollTop={initScroll?.docId === openDocId ? initScroll.top : null}
+            focusHlId={initHl?.docId === openDocId ? initHl.hlId : null}
             scrollPosRef={readerScroll}
             onBack={() => openCanvas(activeCid)}
             onDeleted={() => { setOpenDocId(null); refreshDocs(); }}
@@ -597,6 +617,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
                 : null
             }
             onFocusHandled={() => setFocusReq(null)}
+            onOpenSource={openSourceHl}
             theme={theme}
           />
         ) : (
@@ -608,7 +629,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
             <button
               className="return-chip-btn"
               onClick={returnToNote}
-              title="Reopen the note where you left off reading"
+              title="Reopen the note where you left off reading (⌘E)"
             >
               <Icon name="bookOpen" size={14} />
               Back to “{returnDoc.title}”

@@ -70,10 +70,10 @@ const docSummary = (d) => ({
 
 // Body of a canvas note that mirrors an annotation. Must match what the
 // client builds in sendToCanvas so server refreshes are byte-identical.
-const annotationContent = (hl, docTitle) =>
+// The source document is tracked in data.source, not in the body (issue #22).
+const annotationContent = (hl) =>
   `> ${(hl.quote || '').trim()}` +
-  (hl.note?.trim() ? `\n\n${hl.note.trim()}` : '') +
-  (docTitle ? `\n\n— *${docTitle}*` : '');
+  (hl.note?.trim() ? `\n\n${hl.note.trim()}` : '');
 
 // Issue #11: notes sent to a canvas keep data.source = { docId, hlId }.
 // When a document's highlights change, refresh every linked note so edited
@@ -87,7 +87,7 @@ function syncAnnotationNodes(pid, doc) {
       if (!src || src.docId !== doc.id) continue;
       const hl = byId.get(src.hlId);
       if (!hl) continue; // highlight deleted — leave the note as it was
-      const content = annotationContent(hl, doc.title);
+      const content = annotationContent(hl);
       if (n.data.content !== content) {
         n.data = { ...n.data, content };
         changed = true;

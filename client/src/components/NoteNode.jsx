@@ -3,10 +3,11 @@ import { Handle, Position, NodeResizer } from '@xyflow/react';
 import Markdown from './Markdown.jsx';
 import Icon from './Icon.jsx';
 import { NODE_COLORS, KINDS } from '../constants.js';
-import { RecallContext } from '../contexts.js';
+import { OpenSourceContext, RecallContext } from '../contexts.js';
 
 function NoteNode({ data, selected }) {
   const recall = useContext(RecallContext);
+  const openSource = useContext(OpenSourceContext);
   const [revealed, setRevealed] = useState(false);
 
   useEffect(() => {
@@ -37,12 +38,16 @@ function NoteNode({ data, selected }) {
         </span>
         <span className="note-title">{data.title || 'Untitled'}</span>
         {data.source && (
-          <span
-            className="note-link-flag"
-            title="Mirrors a reader annotation — updates when the annotation changes (editing the body here detaches it)"
+          <button
+            className="note-link-flag nodrag"
+            title="Mirrors a reader annotation — click to open the highlight in the reader (editing the body here detaches it)"
+            onClick={(e) => {
+              e.stopPropagation();
+              openSource?.(data.source);
+            }}
           >
             <Icon name="link" size={11} />
-          </span>
+          </button>
         )}
       </div>
 

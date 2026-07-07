@@ -22,7 +22,7 @@ import NoteModal from './NoteModal.jsx';
 import Icon from './Icon.jsx';
 import { api } from '../api.js';
 import { DEFAULT_NODE, KINDS, NODE_COLORS } from '../constants.js';
-import { RecallContext } from '../contexts.js';
+import { OpenSourceContext, RecallContext } from '../contexts.js';
 
 const nodeTypes = { note: NoteNode };
 const edgeTypes = { note: NoteEdge };
@@ -114,7 +114,7 @@ function layoutNodes(nodes, edges, direction = 'TB') {
   });
 }
 
-function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme }) {
+function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, onOpenSource, theme }) {
   const [nodes, setNodes] = useState(doc.nodes || []);
   const [edges, setEdges] = useState(doc.edges || []);
   const [selNodeId, setSelNodeId] = useState(null);
@@ -695,6 +695,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
 
   return (
     <RecallContext.Provider value={recall}>
+      <OpenSourceContext.Provider value={onOpenSource || null}>
       <div className={`board ${recall ? 'recall-mode' : ''}`}>
         <div className="board-toolbar">
           {Object.entries(KINDS).map(([k, v]) => (
@@ -852,6 +853,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, theme
           />
         )}
       </div>
+      </OpenSourceContext.Provider>
     </RecallContext.Provider>
   );
 }

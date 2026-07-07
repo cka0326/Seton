@@ -38,8 +38,10 @@ No project fixture — install playwright-core in the scratch dir.
 
 Gotchas:
 - `.reader-scroll` has `scroll-behavior: smooth` — use
-  `scrollTo({top, behavior: 'instant'})` in scripts and poll scrollTop until
-  stable before asserting positions.
+  `scrollTo({top, behavior: 'instant'})` in scripts. After an app-initiated
+  smooth scroll, don't poll for "scrollTop stable" (it reads stable before the
+  animation starts); wait for the end condition itself (e.g. mark near
+  viewport center).
 - To create a highlight programmatically: set a DOM Range selection inside
   `.reader-content`, then dispatch a bubbling `mouseup` on the paragraph —
   the popover appears; click a `.pen-dot`.
