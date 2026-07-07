@@ -907,6 +907,42 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   to { opacity: 1; transform: translate(-50%, 0); }
 }
 
+/* floating "back to the note you were reading" pill on the canvas */
+
+.return-chip {
+  position: absolute;
+  z-index: 60;
+  bottom: 68px; /* clears the toast, which is fixed at bottom 26px */
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 6px 3px 4px;
+  box-shadow: var(--shadow-2);
+  animation: toast-in 0.18s ease-out;
+}
+.return-chip .return-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 13px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  max-width: 340px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.return-chip .return-chip-btn:hover { color: var(--accent); background: var(--bg-3); }
+.return-chip .return-chip-btn .icon { flex: none; }
+
 /* ---------- add-document modal ---------- */
 
 .modal.add-doc { height: min(82vh, 780px); }

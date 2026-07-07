@@ -44,10 +44,13 @@ function popoverPosition(rect) {
 export default function DocumentReader({
   projectId,
   docId,
+  initialScrollTop = null,
+  scrollPosRef,
   onBack,
   onDeleted,
   onMetaChange,
   onSendToCanvas,
+  onViewInCanvas,
 }) {
   const [doc, setDoc] = useState(null);
   const [error, setError] = useState('');
@@ -139,13 +142,18 @@ export default function DocumentReader({
     }
   }, [doc?.content, doc?.highlights, doc]);
 
-  // restore the reading position once per document
+  // restore the reading position once per document — an exact offset when
+  // returning from the canvas, the saved progress ratio otherwise
   useLayoutEffect(() => {
     if (!doc || restoredRef.current || !scrollRef.current) return;
     restoredRef.current = true;
     const el = scrollRef.current;
-    el.scrollTop = (doc.progress?.scroll || 0) * (el.scrollHeight - el.clientHeight);
-  }, [doc]);
+    el.scrollTop =
+      initialScrollTop != null
+        ? initialScrollTop
+        : (doc.progress?.scroll || 0) * (el.scrollHeight - el.clientHeight);
+    if (scrollPosRef) scrollPosRef.current = el.scrollTop;
+  }, [doc, initialScrollTop, scrollPosRef]);
 
   const hlTimer = useRef(null);
   const saveHighlights = useCallback(
@@ -208,6 +216,7 @@ export default function DocumentReader({
   const onScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el || !docRef.current) return;
+    if (scrollPosRef) scrollPosRef.current = el.scrollTop;
     const max = el.scrollHeight - el.clientHeight;
     const ratio = max > 0 ? el.scrollTop / max : 1;
     const seen = max > 0 ? Math.min(1, (el.scrollTop + el.clientHeight) / el.scrollHeight) : 1;
@@ -231,7 +240,7 @@ export default function DocumentReader({
       setDoc((d) => (d ? { ...d, progress } : d));
       api.saveDoc(projectId, docId, { progress }).then(() => onMetaChange?.()).catch(() => {});
     }, 800);
-  }, [projectId, docId, onMetaChange]);
+  }, [projectId, docId, onMetaChange, scrollPosRef]);
 
   useEffect(() => () => {
     clearTimeout(progressTimer.current);
@@ -359,6 +368,23 @@ export default function DocumentReader({
       setPopover(null);
     } catch (e) {
       setError(`Send failed: ${e.message}`);
+    }
+  };
+
+  // Open the canvas centered on this highlight's note (created on the fly if
+  // it was never sent). The reading position is remembered by the parent, so
+  // the canvas offers a "back to note" chip that returns right here.
+  const viewHl = async (hl) => {
+    try {
+      await onViewInCanvas?.({
+        quote: hl.quote,
+        note: hl.note,
+        color: hl.color,
+        section: sectionForHl(hl),
+        hlId: hl.id,
+      });
+    } catch (e) {
+      setError(`View in canvas failed: ${e.message}`);
     }
   };
 
@@ -543,6 +569,13 @@ export default function DocumentReader({
                     <Icon name="send" size={13} />
                   </button>
                   <button
+                    className="ghost tiny"
+                    title="View in canvas — jump to this highlight's note"
+                    onClick={(e) => { e.stopPropagation(); viewHl(h); }}
+                  >
+                    <Icon name="grid" size={13} />
+                  </button>
+                  <button
                     className="ghost tiny danger"
                     title="Remove highlight"
                     onClick={(e) => { e.stopPropagation(); removeHl(h.id); }}
@@ -611,6 +644,13 @@ export default function DocumentReader({
               onClick={() => sendHl(editingHl)}
             >
               <Icon name="send" size={14} />
+            </button>
+            <button
+              className="ghost tiny"
+              title="View in canvas — jump to this highlight's note"
+              onClick={() => viewHl(editingHl)}
+            >
+              <Icon name="grid" size={14} />
             </button>
             <button
               className="ghost tiny danger"

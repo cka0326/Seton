@@ -25,6 +25,9 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   const [panel, setPanel] = useState(null); // 'search' | null
   const [stats, setStats] = useState(null);
   const [focusReq, setFocusReq] = useState(null); // {canvasId, nodeId, ts}
+  const [returnTo, setReturnTo] = useState(null); // {docId, scrollTop} — reading spot to go back to
+  const [initScroll, setInitScroll] = useState(null); // {docId, top} — exact restore on next reader open
+  const readerScroll = useRef(0); // live scroll offset inside the open reader
   const [addingDoc, setAddingDoc] = useState(false);
   const [editing, setEditing] = useState(null); // {type:'project'|'canvas'|'doc', id, value}
   const [sidebarOpen, setSidebarOpen] = useState(
@@ -111,14 +114,27 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   }, [projectId, activeCid, loadStamp]);
 
   const openCanvas = (cid) => {
-    // returning from the reader refetches the canvas — "send to canvas" may
-    // have added notes server-side while the board was unmounted
-    if (openDocId) setLoadStamp((s) => s + 1);
+    if (openDocId) {
+      // remember where reading stopped so the canvas can offer a way back
+      setReturnTo({ docId: openDocId, scrollTop: readerScroll.current });
+      // returning from the reader refetches the canvas — "send to canvas" may
+      // have added notes server-side while the board was unmounted
+      setLoadStamp((s) => s + 1);
+    }
     setOpenDocId(null);
     setActiveCid(cid);
   };
 
-  const openDoc = (did) => setOpenDocId(did);
+  const openDoc = (did, at = null) => {
+    setInitScroll(at != null ? { docId: did, top: at } : null);
+    setOpenDocId(did);
+  };
+
+  const returnToNote = () => {
+    const r = returnTo;
+    setReturnTo(null);
+    openDoc(r.docId, r.scrollTop);
+  };
 
   const addCanvas = async () => {
     const c = await api.createCanvas(projectId, 'New canvas');
@@ -235,14 +251,14 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
       await api.saveCanvas(projectId, canvas);
       refreshStats();
       showToast(`Note updated on “${name}”`);
-      return;
+      return { canvasId: cid, nodeId: existing.id };
     }
 
     const bottom = nodes.reduce(
       (m, n) => Math.max(m, n.position.y + (n.height || DEFAULT_NODE.height)),
       0
     );
-    canvas.nodes = nodes.concat({
+    const node = {
       id: newId('n'),
       type: 'note',
       position: { x: 0, y: bottom + 48 },
@@ -258,11 +274,35 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
         tags: docTitle ? [slug(docTitle)] : [],
         ...(hlId && openDocId ? { source: { docId: openDocId, hlId } } : {}),
       },
-    });
+    };
+    canvas.nodes = nodes.concat(node);
     await api.saveCanvas(projectId, canvas);
     refreshStats();
     showToast(`Note added to “${name}”`);
+    return { canvasId: cid, nodeId: node.id };
   }, [projectId, activeCid, docs, openDocId, refreshStats, showToast]);
+
+  // Jump from a highlight to its note on the canvas, creating the note first
+  // if the highlight was never sent. openCanvas records the reading position,
+  // so the "back to note" chip can restore it afterwards.
+  const viewHlOnCanvas = useCallback(async (payload) => {
+    const { canvases } = await api.getAll(projectId);
+    let target = null;
+    for (const c of canvases) {
+      const n = (c.nodes || []).find(
+        (nd) =>
+          nd.data?.source?.hlId === payload.hlId &&
+          nd.data?.source?.docId === openDocId
+      );
+      if (n) {
+        target = { canvasId: c.id, nodeId: n.id };
+        break;
+      }
+    }
+    if (!target) target = await sendToCanvas(payload);
+    setFocusReq({ canvasId: target.canvasId, nodeId: target.nodeId, ts: Date.now() });
+    openCanvas(target.canvasId);
+  }, [projectId, openDocId, sendToCanvas]);
 
   // Esc closes the open Search panel; Cmd/Ctrl+F toggles it.
   useEffect(() => {
@@ -285,6 +325,9 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   }, [panel, toggleSidebar]);
 
   if (!project) return <div className="loading">Loading project…</div>;
+
+  const returnDoc =
+    !openDocId && returnTo ? docs.find((d) => d.id === returnTo.docId) : null;
 
   const editInput = (
     <input
@@ -534,10 +577,13 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
             key={openDocId}
             projectId={projectId}
             docId={openDocId}
+            initialScrollTop={initScroll?.docId === openDocId ? initScroll.top : null}
+            scrollPosRef={readerScroll}
             onBack={() => openCanvas(activeCid)}
             onDeleted={() => { setOpenDocId(null); refreshDocs(); }}
             onMetaChange={refreshDocs}
             onSendToCanvas={sendToCanvas}
+            onViewInCanvas={viewHlOnCanvas}
           />
         ) : doc ? (
           <CanvasBoard
@@ -555,6 +601,22 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
           />
         ) : (
           <div className="loading">Loading canvas…</div>
+        )}
+
+        {returnDoc && (
+          <div className="return-chip">
+            <button
+              className="return-chip-btn"
+              onClick={returnToNote}
+              title="Reopen the note where you left off reading"
+            >
+              <Icon name="bookOpen" size={14} />
+              Back to “{returnDoc.title}”
+            </button>
+            <button className="ghost tiny" onClick={() => setReturnTo(null)} title="Dismiss">
+              <Icon name="close" size={12} />
+            </button>
+          </div>
         )}
       </main>
 
