@@ -606,42 +606,58 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, onOpe
     return () => window.removeEventListener('keydown', onKey, true);
   }, [addNote, deselectAll, duplicateSelection, linkSelection, filter, enterTrace, exitTrace, restoreLayout]);
 
-  // focus a node requested from search results
+  // Focus a node requested from search results or a highlight jump. On a
+  // fresh mount React Flow isn't initialized yet and its initial fitView
+  // would override setCenter, so the request waits for onInit (and the
+  // initial fitView is skipped — see the fitView prop below).
+  const applyFocus = useCallback(
+    (req) => {
+      // a temporary trace/filter view would hide or misplace the target
+      if (traceRef.current) setTrace(null);
+      if (tempSaved.current) restoreLayout();
+      // wait a frame so restored positions and pane measurements are in
+      requestAnimationFrame(() => {
+        const node = latest.current.nodes.find((n) => n.id === req.nodeId);
+        if (!node) {
+          rf.fitView({ padding: 0.2 }); // stand in for the skipped initial fit
+          onFocusHandled?.();
+          return;
+        }
+        const { w, h } = nodeSize(node);
+        rf.setCenter(node.position.x + w / 2, node.position.y + h / 2, {
+          zoom: 1.05,
+          duration: 500,
+        });
+        setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === req.nodeId })));
+        onFocusHandled?.();
+      });
+    },
+    [rf, onFocusHandled, restoreLayout]
+  );
+
+  const rfReady = useRef(false);
+  const pendingFocus = useRef(focusRequest);
+
   useEffect(() => {
     if (!focusRequest) return;
-    // a temporary trace/filter view would hide or misplace the target
-    if (traceRef.current) setTrace(null);
-    if (tempSaved.current) restoreLayout();
-    // wait a frame so restored positions and pane measurements are in
-    const raf = requestAnimationFrame(() => {
-      const node = latest.current.nodes.find((n) => n.id === focusRequest.nodeId);
-      if (!node) {
-        onFocusHandled?.();
-        return;
-      }
-      const { w, h } = nodeSize(node);
-      rf.setCenter(node.position.x + w / 2, node.position.y + h / 2, {
-        zoom: 1.05,
-        duration: 500,
-      });
-      setNodes((ns) =>
-        ns.map((n) => ({ ...n, selected: n.id === focusRequest.nodeId }))
-      );
-      onFocusHandled?.();
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [focusRequest, rf, onFocusHandled, restoreLayout]);
+    if (rfReady.current) applyFocus(focusRequest);
+    else pendingFocus.current = focusRequest;
+  }, [focusRequest, applyFocus]);
+
+  const onInit = useCallback(() => {
+    rfReady.current = true;
+    if (pendingFocus.current) {
+      applyFocus(pendingFocus.current);
+      pendingFocus.current = null;
+    }
+  }, [applyFocus]);
 
   const updateNodeData = useCallback((id, patch) => {
+    // Linked notes (data.source) stay attached: on save the server mirrors
+    // title/note/color edits back to the annotation, and only detaches the
+    // note if the quoted text itself was rewritten.
     setNodes((ns) =>
-      ns.map((n) => {
-        if (n.id !== id) return n;
-        const data = { ...n.data, ...patch };
-        // hand-editing the body detaches the note from its source annotation,
-        // so reader-side edits can never overwrite canvas edits
-        if ('content' in patch && data.source) delete data.source;
-        return { ...n, data };
-      })
+      ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n))
     );
   }, []);
 
@@ -795,12 +811,13 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, onOpe
           }}
           onNodeDoubleClick={(_e, node) => setMaxNodeId(node.id)}
           onPaneClick={onPaneClick}
+          onInit={onInit}
           connectionMode={ConnectionMode.Loose}
           elevateEdgesOnSelect
           zoomOnDoubleClick={false}
           deleteKeyCode={null}
           multiSelectionKeyCode={['Meta', 'Shift']}
-          fitView
+          fitView={!focusRequest}
           minZoom={0.05}
           maxZoom={2.5}
           colorMode={theme}

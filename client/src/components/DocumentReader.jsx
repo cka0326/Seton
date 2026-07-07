@@ -377,15 +377,22 @@ export default function DocumentReader({
     return section;
   };
 
+  // Canvas payload for a highlight. The note title lives on the highlight
+  // (single source of truth); it's initialized here on first use so the
+  // panel's title field and the canvas node always agree.
+  const hlPayload = (hl) => {
+    const words = hl.quote.split(/\s+/);
+    const title =
+      hl.title?.trim() ||
+      sectionForHl(hl) ||
+      words.slice(0, 7).join(' ') + (words.length > 7 ? '…' : '');
+    if (title !== (hl.title || '')) updateHl(hl.id, { title });
+    return { quote: hl.quote, note: hl.note, color: hl.color, title, hlId: hl.id };
+  };
+
   const sendHl = async (hl) => {
     try {
-      await onSendToCanvas({
-        quote: hl.quote,
-        note: hl.note,
-        color: hl.color,
-        section: sectionForHl(hl),
-        hlId: hl.id,
-      });
+      await onSendToCanvas(hlPayload(hl));
       setPopover(null);
     } catch (e) {
       setError(`Send failed: ${e.message}`);
@@ -397,13 +404,7 @@ export default function DocumentReader({
   // the canvas offers a "back to note" chip that returns right here.
   const viewHl = async (hl) => {
     try {
-      await onViewInCanvas?.({
-        quote: hl.quote,
-        note: hl.note,
-        color: hl.color,
-        section: sectionForHl(hl),
-        hlId: hl.id,
-      });
+      await onViewInCanvas?.(hlPayload(hl));
     } catch (e) {
       setError(`View in canvas failed: ${e.message}`);
     }
@@ -588,6 +589,13 @@ export default function DocumentReader({
                           <Icon name="check" size={13} />
                         </button>
                       </div>
+                      <input
+                        className="hl-title-input"
+                        placeholder="Canvas note title"
+                        title="Title of this highlight's note on the canvas"
+                        value={h.title || ''}
+                        onChange={(e) => updateHl(h.id, { title: e.target.value })}
+                      />
                       <textarea
                         className="hl-note-input"
                         placeholder="Your annotation… (why does this matter?)"

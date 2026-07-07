@@ -75,9 +75,22 @@ const annotationContent = (hl) =>
   `> ${(hl.quote || '').trim()}` +
   (hl.note?.trim() ? `\n\n${hl.note.trim()}` : '');
 
+// Keep in sync with HL_TO_NODE_COLOR in client/src/constants.js.
+const HL_TO_NODE_COLOR = {
+  yellow: 'amber',
+  green: 'green',
+  blue: 'blue',
+  red: 'red',
+  purple: 'purple',
+};
+const NODE_TO_HL_COLOR = Object.fromEntries(
+  Object.entries(HL_TO_NODE_COLOR).map(([h, n]) => [n, h])
+);
+
 // Issue #11: notes sent to a canvas keep data.source = { docId, hlId }.
-// When a document's highlights change, refresh every linked note so edited
-// annotations show up on the canvas.
+// When a document's highlights change, refresh every linked note — content,
+// title and color — so annotation edits show up on the canvas (issue #22:
+// the highlight is the single source of truth).
 function syncAnnotationNodes(pid, doc) {
   const byId = new Map((doc.highlights || []).map((h) => [h.id, h]));
   for (const canvas of store.listCanvases(pid)) {
@@ -87,14 +100,68 @@ function syncAnnotationNodes(pid, doc) {
       if (!src || src.docId !== doc.id) continue;
       const hl = byId.get(src.hlId);
       if (!hl) continue; // highlight deleted — leave the note as it was
+      const next = { ...n.data };
       const content = annotationContent(hl);
-      if (n.data.content !== content) {
-        n.data = { ...n.data, content };
+      if (next.content !== content) next.content = content;
+      const title = (hl.title || '').trim();
+      if (title && next.title !== title) next.title = title;
+      const color = HL_TO_NODE_COLOR[hl.color];
+      if (color && next.color !== color) next.color = color;
+      if (
+        next.content !== n.data.content ||
+        next.title !== n.data.title ||
+        next.color !== n.data.color
+      ) {
+        n.data = next;
         changed = true;
       }
     }
     if (changed) store.saveCanvas(pid, canvas, { touch: false });
   }
+}
+
+// The reverse direction (issue #22): edits to a linked note on the canvas
+// flow back into its annotation — note text (the body below the quote),
+// title, and color (when it maps to a highlight pen). The quoted text
+// belongs to the document; if a canvas edit rewrites it, the note detaches
+// (data.source is stripped) instead of corrupting the highlight.
+function syncAnnotationsFromCanvas(pid, canvas) {
+  const touched = new Map(); // docId → doc, saved once at the end
+  for (const n of canvas.nodes || []) {
+    const src = n.data?.source;
+    if (!src) continue;
+    const doc = touched.get(src.docId) || store.getDoc(pid, src.docId);
+    if (!doc) continue;
+    const hl = (doc.highlights || []).find((h) => h.id === src.hlId);
+    if (!hl) continue; // highlight deleted — leave the note as it was
+    const content = n.data.content || '';
+    const quoteLine = `> ${(hl.quote || '').trim()}`;
+    if (!content.startsWith(quoteLine)) {
+      delete n.data.source;
+      continue;
+    }
+    let changed = false;
+    const note = content.slice(quoteLine.length).replace(/^\s+/, '');
+    if (note !== (hl.note || '')) {
+      hl.note = note;
+      changed = true;
+    }
+    const title = (n.data.title || '').trim();
+    if (title && title !== (hl.title || '')) {
+      hl.title = title;
+      changed = true;
+    }
+    const hlColor = NODE_TO_HL_COLOR[n.data.color];
+    if (hlColor && hlColor !== hl.color) {
+      hl.color = hlColor;
+      changed = true;
+    }
+    if (changed) {
+      doc.updatedAt = Date.now();
+      touched.set(src.docId, doc);
+    }
+  }
+  for (const doc of touched.values()) store.saveDoc(pid, doc);
 }
 
 // Title fallback: first markdown heading, else first non-empty line.
@@ -196,6 +263,7 @@ app.put('/api/projects/:pid/canvases/:cid', wrap(async (req, res) => {
   }
   mustProject(req.params.pid);
   doc.updatedAt = Date.now();
+  syncAnnotationsFromCanvas(req.params.pid, doc); // linked-note edits → annotations
   const saved = store.saveCanvas(req.params.pid, doc);
   sync.schedule(req.params.pid);
   res.json(saved);

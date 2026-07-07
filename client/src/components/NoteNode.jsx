@@ -40,7 +40,7 @@ function NoteNode({ data, selected }) {
         {data.source && (
           <button
             className="note-link-flag nodrag"
-            title="Mirrors a reader annotation — click to open the highlight in the reader (editing the body here detaches it)"
+            title="Mirrors a reader annotation — click to open the highlight in the reader (edits here sync back; rewriting the quoted text detaches it)"
             onClick={(e) => {
               e.stopPropagation();
               openSource?.(data.source);

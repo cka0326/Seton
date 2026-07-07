@@ -1214,6 +1214,7 @@ mark.hl.hl-flash { animation: hl-flash 1.2s ease-out; }
   cursor: default;
 }
 .hl-card-edit .hl-note-input { min-height: 48px; }
+.hl-title-input { font-size: 12.5px; padding: 5px 8px; }
 
 /* selection / annotation popover */
 .hl-popover {

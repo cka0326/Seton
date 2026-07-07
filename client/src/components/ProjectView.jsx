@@ -220,7 +220,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   // (falling back to the active canvas, then the first one). Notes remember
   // their source annotation, so re-sending updates in place and later
   // annotation edits propagate (see the document PUT handler server-side).
-  const sendToCanvas = useCallback(async ({ quote, note, color, section, hlId }) => {
+  const sendToCanvas = useCallback(async ({ quote, note, color, section, title: hlTitle, hlId }) => {
     const p = await api.getProject(projectId);
     const has = (id) => id && p.canvases.some((c) => c.id === id);
     const cid = [p.defaultCanvasId, activeCid, p.canvases[0]?.id].find(has);
@@ -230,6 +230,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
     const docTitle = docs.find((d) => d.id === openDocId)?.title || '';
     const words = quote.split(/\s+/);
     const title =
+      hlTitle?.trim() ||
       section?.trim() ||
       words.slice(0, 7).join(' ') + (words.length > 7 ? '…' : '');
     // the source doc is kept internally (data.source + tag), not in the body
