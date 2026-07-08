@@ -140,6 +140,86 @@ function layoutNodes(nodes, edges, direction = 'TB') {
   });
 }
 
+// Bucket close-together coordinates onto the same grid line. Values within `gap`
+// of the previous one share an index; a bigger jump starts a new line. Fed
+// dagre's crossing-minimized centers, this snaps them into aligned rows/columns.
+function clusterAxis(values, gap) {
+  const sorted = [...new Set(values)].sort((a, b) => a - b);
+  const index = new Map();
+  let idx = -1;
+  let prev = null;
+  for (const v of sorted) {
+    if (prev === null || v - prev > gap) idx++;
+    index.set(v, idx);
+    prev = v;
+  }
+  return index;
+}
+
+// Grid auto-layout: let dagre decide the ordering (it minimizes crossings), then
+// snap the nodes onto a uniform grid so the result reads as a compact, balanced
+// grid instead of a tall/wide hierarchy — connected notes stay close, edges stay
+// mostly untangled.
+function layoutGrid(nodes, edges) {
+  if (nodes.length <= 1) return nodes.map((n) => ({ ...n }));
+  const laid = layoutNodes(nodes, edges, 'TB');
+  // uniform cell = biggest node + gap, so every row and column lines up
+  let maxW = 0;
+  let maxH = 0;
+  for (const n of nodes) {
+    const { w, h } = nodeSize(n);
+    maxW = Math.max(maxW, w);
+    maxH = Math.max(maxH, h);
+  }
+  const GAP = 56;
+  const cellW = maxW + GAP;
+  const cellH = maxH + GAP;
+  const centers = laid.map((n) => {
+    const { w, h } = nodeSize(n);
+    return { id: n.id, cx: n.position.x + w / 2, cy: n.position.y + h / 2 };
+  });
+  const colOf = clusterAxis(centers.map((c) => c.cx), cellW * 0.6);
+  const rowOf = clusterAxis(centers.map((c) => c.cy), cellH * 0.6);
+  const cells = new Map(
+    centers.map((c) => [c.id, { col: colOf.get(c.cx), row: rowOf.get(c.cy) }])
+  );
+  // place in reading order and nudge right past any cell already taken, so two
+  // notes that snapped to the same cell don't overlap
+  const order = [...cells.entries()].sort(
+    (a, b) => a[1].row - b[1].row || a[1].col - b[1].col
+  );
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const taken = new Set();
+  const out = new Map();
+  for (const [id, { row, col }] of order) {
+    let c = col;
+    while (taken.has(`${row}:${c}`)) c++;
+    taken.add(`${row}:${c}`);
+    const { w, h } = nodeSize(byId.get(id));
+    out.set(id, {
+      x: c * cellW + (cellW - w) / 2,
+      y: row * cellH + (cellH - h) / 2,
+    });
+  }
+  return nodes.map((n) => ({ ...n, position: out.get(n.id) || n.position }));
+}
+
+// Center of the bounding box of a set of nodes (in flow coords).
+function bboxCenter(nodes) {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const n of nodes) {
+    const { w, h } = nodeSize(n);
+    minX = Math.min(minX, n.position.x);
+    minY = Math.min(minY, n.position.y);
+    maxX = Math.max(maxX, n.position.x + w);
+    maxY = Math.max(maxY, n.position.y + h);
+  }
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+}
+
 function Board({
   projectId,
   doc,
@@ -601,26 +681,57 @@ function Board({
     });
   }, []);
 
-  const autoLayout = useCallback(
-    (direction = 'TB') => {
+  // Auto-arrange with `layoutFn`. When 2+ notes are selected, only those are
+  // rearranged (kept where they sit, so the rest of the canvas is untouched);
+  // otherwise the whole canvas is laid out.
+  const runLayout = useCallback(
+    (layoutFn) => {
       // arranging commits a real layout — leave any temporary view first so
       // the arrange isn't reverted by its restore
       if (traceRef.current) setTrace(null);
       tempSaved.current = null;
       filterViewRef.current = false;
       setFilter('');
-      const laid = layoutNodes(latest.current.nodes, latest.current.edges, direction)
-        .map((n) => ({ ...n, hidden: false }));
-      setNodes(laid);
-      // edges keep whatever anchors they were drawn with; after moving every
-      // node those anchors are stale, so re-route each edge to facing sides
-      setEdges((es) => retargetEdges(laid, es));
+      const allNodes = latest.current.nodes;
+      const allEdges = latest.current.edges;
+      const selIds = new Set(selectedRef.current.nodes);
+      const useSel = selIds.size >= 2;
+      const subset = useSel ? allNodes.filter((n) => selIds.has(n.id)) : allNodes;
+      const subEdges = useSel
+        ? allEdges.filter((e) => selIds.has(e.source) && selIds.has(e.target))
+        : allEdges;
+      let laid = layoutFn(subset, subEdges).map((n) => ({ ...n, hidden: false }));
+      if (useSel) {
+        // keep the arranged cluster centered where the user had it
+        const from = bboxCenter(subset);
+        const to = bboxCenter(laid);
+        const dx = from.x - to.x;
+        const dy = from.y - to.y;
+        laid = laid.map((n) => ({
+          ...n,
+          position: { x: n.position.x + dx, y: n.position.y + dy },
+        }));
+      }
+      const laidById = new Map(laid.map((n) => [n.id, n]));
+      const merged = allNodes.map((n) => laidById.get(n.id) || n);
+      setNodes(merged);
+      // edges keep whatever anchors they were drawn with; after moving nodes
+      // those anchors are stale, so re-route each moved edge to facing sides
+      setEdges((es) => retargetEdges(merged, es));
       requestAnimationFrame(() =>
-        rf.fitView({ padding: 0.2, duration: 500 })
+        rf.fitView({
+          padding: 0.2,
+          duration: 500,
+          ...(useSel ? { nodes: subset.map((n) => ({ id: n.id })) } : {}),
+        })
       );
     },
     [rf]
   );
+
+  const arrangeTB = useCallback(() => runLayout((n, e) => layoutNodes(n, e, 'TB')), [runLayout]);
+  const arrangeLR = useCallback(() => runLayout((n, e) => layoutNodes(n, e, 'LR')), [runLayout]);
+  const arrangeGrid = useCallback(() => runLayout(layoutGrid), [runLayout]);
 
   const deselectAll = useCallback(() => {
     // A focused node re-selects itself, so blur it before clearing selection.
@@ -860,17 +971,24 @@ function Board({
           <span className="tb-sep" />
           <button
             className="ghost"
-            onClick={() => autoLayout('TB')}
-            title="Auto-arrange notes into a hierarchy (top-down)"
+            onClick={arrangeTB}
+            title="Auto-arrange into a hierarchy, top-down (selected notes only, or the whole canvas)"
           >
             <Icon name="layout" /><span className="btn-label"> Arrange</span>
           </button>
           <button
             className="ghost"
-            onClick={() => autoLayout('LR')}
-            title="Auto-arrange left-to-right"
+            onClick={arrangeLR}
+            title="Auto-arrange left-to-right (selected notes only, or the whole canvas)"
           >
             <Icon name="layoutLR" /><span className="btn-label"> L→R</span>
+          </button>
+          <button
+            className="ghost"
+            onClick={arrangeGrid}
+            title="Auto-arrange into a compact grid that minimizes crossings (selected notes only, or the whole canvas)"
+          >
+            <Icon name="grid" /><span className="btn-label"> Grid</span>
           </button>
           <button
             className="ghost"
@@ -952,6 +1070,10 @@ function Board({
           zoomOnDoubleClick={false}
           deleteKeyCode={null}
           multiSelectionKeyCode={['Meta', 'Shift']}
+          // hold Ctrl/Cmd and drag to box-select. Cmd is the working gesture on
+          // the Mac app — React Flow's d3-drag filters out ctrl-mousedown as a
+          // right-click, so Control only takes effect off macOS.
+          selectionKeyCode={['Control', 'Meta']}
           fitView={!focusRequest && !initialViewport}
           defaultViewport={initialViewport || undefined}
           minZoom={0.05}
