@@ -92,6 +92,27 @@ function retargetEdges(nodes, edges) {
   });
 }
 
+// Rough on-screen size of a wrapped edge label — matches the .edge-label rule
+// in styles.css (11px text, ~200px max content width). Fed to dagre so the
+// layout reserves room for the label instead of letting it overlap nodes.
+const LABEL_MAX_W = 200; // max content width before wrapping
+const LABEL_CHAR_W = 6.1; // ~avg glyph advance at 11px
+const LABEL_LINE_H = 16; // line box height (11px × 1.35)
+const LABEL_PAD_X = 20; // horizontal padding + border
+const LABEL_PAD_Y = 8; // vertical padding + border
+
+function estimateLabelSize(label) {
+  const text = (label || '').trim();
+  if (!text) return null;
+  const contentPx = text.length * LABEL_CHAR_W;
+  const contentW = Math.min(LABEL_MAX_W, contentPx);
+  const lines = Math.max(1, Math.ceil(contentPx / contentW));
+  return {
+    width: Math.round(contentW + LABEL_PAD_X),
+    height: Math.round(lines * LABEL_LINE_H + LABEL_PAD_Y),
+  };
+}
+
 // Hierarchical auto-layout using dagre. Returns nodes with new positions.
 function layoutNodes(nodes, edges, direction = 'TB') {
   const g = new dagre.graphlib.Graph();
@@ -104,7 +125,11 @@ function layoutNodes(nodes, edges, direction = 'TB') {
     });
   }
   for (const e of edges) {
-    if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target);
+    if (!g.hasNode(e.source) || !g.hasNode(e.target)) continue;
+    // give dagre the label's footprint (centered on the edge) so it spaces the
+    // ranks/columns wide enough for the whole label to sit clear of the nodes
+    const size = estimateLabelSize(e.data?.label);
+    g.setEdge(e.source, e.target, size ? { ...size, labelpos: 'c' } : {});
   }
   dagre.layout(g);
   return nodes.map((n) => {

@@ -66,7 +66,7 @@ defined in `client/src/constants.js`.
 | **ProjectView** | Main workspace shell. Owns the sidebar (canvases, library, search, export), routes between `CanvasBoard` and `DocumentReader`, remembers each canvas's viewport, and coordinates note⇄reader navigation (`sendToCanvas`, `viewHlOnCanvas`, `openSourceHl`, "back to note" chip). |
 | **CanvasBoard** | The React Flow canvas. Owns nodes/edges state + debounced autosave, selection, keyboard shortcuts, add / duplicate / link notes, image paste & drop (issue #24), auto-layout (dagre), trace mode, filter view, recall mode, and viewport persistence. Wraps the board in `RecallContext`, `OpenSourceContext`, `NodeSizeContext`. |
 | **NoteNode** | A single note card — a custom React Flow node. Renders the note's markdown, connection handles, the resizer, and the **auto-fit** button that sizes the node to its content (issue #23). |
-| **NoteEdge** | Custom edge (bezier) with an inline editable label and a selection halo. |
+| **NoteEdge** | Custom edge (bezier) with a wrapping label (edited via `Inspector`) and a selection halo. |
 | **NoteModal** | Full-screen note editor: split markdown editor + live preview, plus title, kind, color, font size, alignment, tags, width/height, delete. Paste/drop images to embed them. Opened by double-click or `e`. |
 | **Inspector** | Small side panel to edit/delete a selected **edge's** label. |
 | **DocumentReader** | Reads a library document: outline/TOC with scrollspy, text selection → highlight popover, highlights & annotations panel, reading-time clock, progress bar, and send/view-highlight-on-canvas. Restores the reading position on open. |

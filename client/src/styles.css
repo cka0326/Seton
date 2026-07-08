@@ -721,19 +721,22 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   opacity: 1;
 }
 
-/* edge label */
+/* edge label — wraps to show the whole note instead of truncating (a rounded
+   box rather than a pill, since multi-line labels read better boxed) */
 .edge-label {
   position: absolute;
   background: var(--bg-3);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 999px;
+  border-radius: 10px;
   font-size: 11px;
-  padding: 2px 9px;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
+  padding: 3px 9px;
+  max-width: 200px;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  text-align: center;
   pointer-events: all;
 }
 .edge-label.selected { border-color: var(--accent); }
