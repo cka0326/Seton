@@ -44,6 +44,9 @@ projects from the Drive folder.
 **Canvas & notes**
 - Unlimited pan/zoom canvas per project, multiple canvases per project.
 - Notes are markdown (GFM: tables, task lists, code blocks…), rendered live.
+- **Images**: paste or drop an image onto the canvas to drop it in as a note,
+  or paste/drop into a note or document editor to embed it inline. An
+  image note behaves exactly like a text note (same styling, sizing, export).
 - **Double-click a note to open the full-screen editor** — it opens in edit
   mode with a live split preview and every control in one place: title,
   markdown body, kind, color, font size, text alignment, width/height, tags,
@@ -91,6 +94,10 @@ data/     Your projects (gitignored here)
 
 Point `SETON_DATA_DIR` somewhere else (e.g. a synced folder) to relocate your
 notes. `PORT` overrides the server port.
+
+For a component-by-component map of the codebase (and the shared vocabulary to
+use when directing an AI agent), see [ARCHITECTURE.md](ARCHITECTURE.md).
+Contributor/agent guidelines are in [AGENTS.md](AGENTS.md).
 
 ## Data model
 

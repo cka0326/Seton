@@ -1,13 +1,39 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Markdown from './Markdown.jsx';
 import Icon from './Icon.jsx';
 import { KINDS, NODE_COLORS } from '../constants.js';
+import { fileToImage, imageFilesFromEvent, imageMarkdown, insertAtCursor } from '../lib/image.js';
 
 export default function NoteModal({ node, onChange, onChangeDims, onDelete, onClose }) {
   // opens in edit mode (split editor + preview); toggle to reading view
   const [reading, setReading] = useState(false);
+  const [imgBusy, setImgBusy] = useState(false);
+  const editorRef = useRef(null);
   const d = node.data || {};
   const kind = KINDS[d.kind] || KINDS.note;
+
+  // Paste or drop an image into the editor → embed it inline (issue #24).
+  const onImageEvent = async (e) => {
+    const files = imageFilesFromEvent(e);
+    if (!files.length) return; // let normal text paste / file drop proceed
+    e.preventDefault();
+    setImgBusy(true);
+    try {
+      const parts = [];
+      for (const f of files) parts.push(imageMarkdown((await fileToImage(f)).src));
+      const ta = editorRef.current;
+      const { value, caret } = insertAtCursor(ta, parts.join('\n\n'));
+      onChange({ content: value });
+      requestAnimationFrame(() => {
+        ta.focus();
+        ta.setSelectionRange(caret, caret);
+      });
+    } catch {
+      /* oversized / unreadable image — leave the note unchanged */
+    } finally {
+      setImgBusy(false);
+    }
+  };
 
   useEffect(() => {
     const onKey = (e) => {
@@ -141,10 +167,13 @@ export default function NoteModal({ node, onChange, onChangeDims, onDelete, onCl
         <div className={`modal-main ${reading ? 'reading' : ''}`}>
           {!reading && (
             <textarea
+              ref={editorRef}
               className="modal-editor"
               value={d.content || ''}
-              placeholder={'Write in Markdown…\n\n# Heading\n- bullet\n**bold**, *italic*, `code`'}
+              placeholder={'Write in Markdown…\n\n# Heading\n- bullet\n**bold**, *italic*, `code`\n\nPaste or drop an image to embed it.'}
               onChange={(e) => onChange({ content: e.target.value })}
+              onPaste={onImageEvent}
+              onDrop={onImageEvent}
             />
           )}
           <div className="modal-preview">
@@ -172,6 +201,7 @@ export default function NoteModal({ node, onChange, onChangeDims, onDelete, onCl
         </div>
 
         <div className="modal-foot">
+          {imgBusy && <span className="muted small">Embedding image…</span>}
           <div className="spacer" />
           <button className="danger" onClick={() => { onDelete(); onClose(); }}>
             Delete note

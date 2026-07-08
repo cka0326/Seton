@@ -23,6 +23,7 @@ import Icon from './Icon.jsx';
 import { api } from '../api.js';
 import { DEFAULT_NODE, KINDS, NODE_COLORS } from '../constants.js';
 import { NodeSizeContext, OpenSourceContext, RecallContext } from '../contexts.js';
+import { fileToImage, imageFilesFromEvent, imageMarkdown } from '../lib/image.js';
 
 const nodeTypes = { note: NoteNode };
 const edgeTypes = { note: NoteEdge };
@@ -432,6 +433,86 @@ function Board({
     [rf, addNoteAt]
   );
 
+  // Paste/drop an image onto the canvas → a new note whose body is that image.
+  // Sizing follows the image's aspect so it reads as a picture, not a text card.
+  const addImageNode = useCallback(
+    (img, screenPt) => {
+      if (traceRef.current) return; // no new notes while navigating a trace
+      const displayW = Math.max(180, Math.min(360, img.width));
+      const bodyW = displayW - 24; // note-body horizontal padding
+      const imgH = Math.max(1, Math.round(bodyW * (img.height / img.width)));
+      const height = Math.round(imgH + 64); // + header + body padding
+      const center = rf.screenToFlowPosition(
+        screenPt || { x: window.innerWidth / 2, y: window.innerHeight / 2 }
+      );
+      const node = {
+        id: newId('n'),
+        type: 'note',
+        position: { x: center.x - displayW / 2, y: center.y - height / 2 },
+        width: displayW,
+        height: Math.max(80, height),
+        selected: true,
+        data: {
+          title: 'Image',
+          content: imageMarkdown(img.src),
+          kind: 'note',
+          color: 'slate',
+          fontSize: DEFAULT_NODE.fontSize,
+          textAlign: 'center',
+          tags: [],
+        },
+      };
+      setNodes((ns) => ns.map((n) => ({ ...n, selected: false })).concat(node));
+    },
+    [rf]
+  );
+
+  // Paste an image anywhere on the board (not while typing or with the note
+  // editor open) to drop it in as an image note (issue #24).
+  useEffect(() => {
+    const onPaste = async (e) => {
+      const el = e.target;
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) {
+        return; // editors handle their own image paste
+      }
+      if (maxNodeIdRef.current) return; // note editor modal is open
+      const files = imageFilesFromEvent(e);
+      if (!files.length) return;
+      e.preventDefault();
+      for (const f of files) {
+        try {
+          addImageNode(await fileToImage(f));
+        } catch {
+          /* skip unreadable / oversized image */
+        }
+      }
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [addImageNode]);
+
+  // Drag an image file from the desktop onto the board → image note at the drop
+  // point (issue #24). onDragOver must allow the drop for onDrop to fire.
+  const onBoardDragOver = useCallback((e) => {
+    if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+  }, []);
+  const onBoardDrop = useCallback(
+    async (e) => {
+      const files = imageFilesFromEvent(e);
+      if (!files.length) return;
+      e.preventDefault();
+      const pt = { x: e.clientX, y: e.clientY };
+      for (const f of files) {
+        try {
+          addImageNode(await fileToImage(f), pt);
+        } catch {
+          /* skip unreadable / oversized image */
+        }
+      }
+    },
+    [addImageNode]
+  );
+
   const onPaneClick = useCallback(
     (e) => {
       if (e.detail === 2) {
@@ -735,7 +816,11 @@ function Board({
     <RecallContext.Provider value={recall}>
       <OpenSourceContext.Provider value={onOpenSource || null}>
       <NodeSizeContext.Provider value={updateNodeDims}>
-      <div className={`board ${recall ? 'recall-mode' : ''}`}>
+      <div
+        className={`board ${recall ? 'recall-mode' : ''}`}
+        onDrop={onBoardDrop}
+        onDragOver={onBoardDragOver}
+      >
         <div className="board-toolbar">
           {Object.entries(KINDS).map(([k, v]) => (
             <button

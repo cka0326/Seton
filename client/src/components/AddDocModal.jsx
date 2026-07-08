@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Icon from './Icon.jsx';
+import { fileToImage, imageFilesFromEvent, imageMarkdown, insertAtCursor } from '../lib/image.js';
 
 // Paste AI-generated notes (or any markdown) — or import a .md/.txt file —
 // to add a study document to the project library.
@@ -9,6 +10,7 @@ export default function AddDocModal({ onCreate, onClose }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const fileRef = useRef(null);
+  const editorRef = useRef(null);
 
   useEffect(() => {
     const onKey = (e) => {
@@ -24,6 +26,28 @@ export default function AddDocModal({ onCreate, onClose }) {
   const loadFile = async (file) => {
     setContent(await file.text());
     if (!title) setTitle(file.name.replace(/\.(md|markdown|txt)$/i, ''));
+  };
+
+  // Paste or drop an image → embed it inline at the caret (issue #24). Returns
+  // true when images were handled, so callers can fall back to text otherwise.
+  const embedImages = async (e) => {
+    const files = imageFilesFromEvent(e);
+    if (!files.length) return false;
+    e.preventDefault();
+    try {
+      const parts = [];
+      for (const f of files) parts.push(imageMarkdown((await fileToImage(f)).src));
+      const ta = editorRef.current;
+      const { value, caret } = insertAtCursor(ta, parts.join('\n\n'));
+      setContent(value);
+      requestAnimationFrame(() => {
+        ta.focus();
+        ta.setSelectionRange(caret, caret);
+      });
+    } catch (err) {
+      setError(err.message || 'Could not embed image');
+    }
+    return true;
   };
 
   const create = async () => {
@@ -61,21 +85,25 @@ export default function AddDocModal({ onCreate, onClose }) {
         {error && <div className="error" style={{ margin: '10px 16px 0' }}>{error}</div>}
 
         <textarea
+          ref={editorRef}
           className="modal-editor add-doc-editor"
           autoFocus
           placeholder={
             'Paste your study material here — AI-generated notes, a chapter summary, ' +
             'paper notes, docs…\n\nMarkdown is rendered: # headings become the outline, ' +
-            'code blocks, tables and lists all work.\n\nOnce added, you can read it, ' +
-            'highlight passages, annotate them, and send key points to your canvas.'
+            'code blocks, tables and lists all work. Paste or drop an image to embed it.' +
+            '\n\nOnce added, you can read it, highlight passages, annotate them, and send ' +
+            'key points to your canvas.'
           }
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          onDrop={(e) => {
+          onPaste={embedImages}
+          onDrop={async (e) => {
+            if (await embedImages(e)) return; // image → embedded inline
             const f = e.dataTransfer?.files?.[0];
             if (f) {
               e.preventDefault();
-              loadFile(f);
+              loadFile(f); // .md / .txt → load as the document body
             }
           }}
         />

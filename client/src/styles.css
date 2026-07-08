@@ -774,7 +774,15 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   padding: 4px 9px;
 }
 .md a { color: var(--accent); }
-.md img { max-width: 100%; }
+/* embedded images (issue #24): scale to the container, stay crisp, and read as
+   a centered block so an image-only note looks intentional, not inline text */
+.md img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0.4em auto;
+  border-radius: 8px;
+}
 
 /* ---------- inspector ---------- */
 
