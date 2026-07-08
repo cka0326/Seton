@@ -22,7 +22,7 @@ import NoteModal from './NoteModal.jsx';
 import Icon from './Icon.jsx';
 import { api } from '../api.js';
 import { DEFAULT_NODE, KINDS, NODE_COLORS } from '../constants.js';
-import { OpenSourceContext, RecallContext } from '../contexts.js';
+import { NodeSizeContext, OpenSourceContext, RecallContext } from '../contexts.js';
 
 const nodeTypes = { note: NoteNode };
 const edgeTypes = { note: NoteEdge };
@@ -114,7 +114,17 @@ function layoutNodes(nodes, edges, direction = 'TB') {
   });
 }
 
-function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, onOpenSource, theme }) {
+function Board({
+  projectId,
+  doc,
+  canvasName,
+  focusRequest,
+  onFocusHandled,
+  onOpenSource,
+  theme,
+  initialViewport,
+  onViewportChange,
+}) {
   const [nodes, setNodes] = useState(doc.nodes || []);
   const [edges, setEdges] = useState(doc.edges || []);
   const [selNodeId, setSelNodeId] = useState(null);
@@ -200,6 +210,18 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, onOpe
       if (latest.current.dirty) persist();
     };
   }, [persist]);
+
+  // Remember the pan/zoom so hopping to the reader and back (which remounts this
+  // board) returns to the exact same view instead of resetting to fitView.
+  const lastViewport = useRef(initialViewport || null);
+  const onMove = useCallback((_e, vp) => {
+    lastViewport.current = vp;
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (lastViewport.current) onViewportChange?.(lastViewport.current);
+    };
+  }, [onViewportChange]);
 
   const onNodesChange = useCallback(
     (changes) => setNodes((ns) => applyNodeChanges(changes, ns)),
@@ -712,6 +734,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, onOpe
   return (
     <RecallContext.Provider value={recall}>
       <OpenSourceContext.Provider value={onOpenSource || null}>
+      <NodeSizeContext.Provider value={updateNodeDims}>
       <div className={`board ${recall ? 'recall-mode' : ''}`}>
         <div className="board-toolbar">
           {Object.entries(KINDS).map(([k, v]) => (
@@ -812,13 +835,15 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, onOpe
           onNodeDoubleClick={(_e, node) => setMaxNodeId(node.id)}
           onPaneClick={onPaneClick}
           onInit={onInit}
+          onMove={onMove}
           connectionMode={ConnectionMode.Loose}
           connectionRadius={40}
           elevateEdgesOnSelect
           zoomOnDoubleClick={false}
           deleteKeyCode={null}
           multiSelectionKeyCode={['Meta', 'Shift']}
-          fitView={!focusRequest}
+          fitView={!focusRequest && !initialViewport}
+          defaultViewport={initialViewport || undefined}
           minZoom={0.05}
           maxZoom={2.5}
           colorMode={theme}
@@ -871,6 +896,7 @@ function Board({ projectId, doc, canvasName, focusRequest, onFocusHandled, onOpe
           />
         )}
       </div>
+      </NodeSizeContext.Provider>
       </OpenSourceContext.Provider>
     </RecallContext.Provider>
   );

@@ -162,10 +162,14 @@ export default function DocumentReader({
       mark.classList.add('hl-flash');
       setTimeout(() => mark.classList.remove('hl-flash'), 1200);
     } else {
-      el.scrollTop =
+      const top =
         initialScrollTop != null
           ? initialScrollTop
           : (doc.progress?.scroll || 0) * (el.scrollHeight - el.clientHeight);
+      // `behavior: instant` overrides the container's `scroll-behavior: smooth`
+      // so returning from the canvas lands at the saved spot immediately instead
+      // of visibly scrolling down to it (issue #26).
+      el.scrollTo({ top, behavior: 'instant' });
     }
     if (scrollPosRef) scrollPosRef.current = el.scrollTop;
   }, [doc, initialScrollTop, focusHlId, scrollPosRef]);

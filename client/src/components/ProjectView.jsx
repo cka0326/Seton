@@ -29,6 +29,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   const [initScroll, setInitScroll] = useState(null); // {docId, top} — exact restore on next reader open
   const [initHl, setInitHl] = useState(null); // {docId, hlId} — open the reader at this highlight
   const readerScroll = useRef(0); // live scroll offset inside the open reader
+  const canvasViewports = useRef({}); // canvasId → last {x, y, zoom}, kept across board remounts
   const [addingDoc, setAddingDoc] = useState(false);
   const [editing, setEditing] = useState(null); // {type:'project'|'canvas'|'doc', id, value}
   const [sidebarOpen, setSidebarOpen] = useState(
@@ -620,6 +621,8 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
             onFocusHandled={() => setFocusReq(null)}
             onOpenSource={openSourceHl}
             theme={theme}
+            initialViewport={canvasViewports.current[doc.id]}
+            onViewportChange={(vp) => { canvasViewports.current[doc.id] = vp; }}
           />
         ) : (
           <div className="loading">Loading canvas…</div>

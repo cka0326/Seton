@@ -137,6 +137,13 @@ const PATHS = {
       <rect x="14" y="14" width="7" height="7" rx="1.5" />
     </>
   ),
+  // fit a node's height to its content — frame corners + vertical collapse arrows
+  autofit: (
+    <>
+      <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3" />
+      <path d="M12 8v8M9.5 10.5 12 8l2.5 2.5M9.5 13.5 12 16l2.5-2.5" />
+    </>
+  ),
 };
 
 export default function Icon({ name, size = 16, className = '', ...rest }) {
