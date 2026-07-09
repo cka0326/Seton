@@ -43,7 +43,9 @@ Stored in `<SETON_DATA_DIR>/seton.db` (SQLite, WAL). Three tables:
   canvases and documents. `defaultCanvasId` is where reader-sent notes land.
 - **Canvas** — `{ id, name, nodes[], edges[] }`. The source of truth for the
   board. `nodes`/`edges` are stored as JSON text.
-  - **Node** — `{ id, type:'note', position:{x,y}, width, height, data }` where
+  - **Node** — `{ id, type:'note', position:{x,y}, width, height, updatedAt?, data }` where
+    `updatedAt` (ms) is stamped on create/edit/drag so "send to canvas" can drop
+    new notes next to the last-modified one (issue #30). It has
     `data = { title, content (markdown), kind, color, fontSize, textAlign,
     tags[], source? }`. `source = { docId, hlId }` marks a note that mirrors a
     reader highlight. Images are embedded in `content` as `data:` URLs, so an

@@ -511,6 +511,7 @@ function Board({
       width: DEFAULT_NODE.width,
       height: DEFAULT_NODE.height,
       selected: true,
+      updatedAt: Date.now(),
       data: {
         title: `New ${KINDS[kind]?.label.toLowerCase() || 'note'}`,
         content: '',
@@ -557,6 +558,7 @@ function Board({
         width: displayW,
         height: Math.max(80, height),
         selected: true,
+        updatedAt: Date.now(),
         data: {
           title: 'Image',
           content: imageMarkdown(img.src),
@@ -643,6 +645,7 @@ function Board({
           id: newId('n'),
           position: { x: n.position.x + 36, y: n.position.y + 36 },
           selected: true,
+          updatedAt: Date.now(),
           data: { ...n.data, tags: [...(n.data?.tags || [])] },
         }));
       if (!copies.length) return ns;
@@ -891,17 +894,30 @@ function Board({
     }
   }, [applyFocus]);
 
+  // Stamp `updatedAt` on a node whenever it's touched, so "send to canvas"
+  // (in ProjectView) can drop new notes next to the last-modified one (#30).
+  const stampNodes = useCallback((ids) => {
+    const set = ids instanceof Set ? ids : new Set(ids);
+    if (!set.size) return;
+    const t = Date.now();
+    setNodes((ns) => ns.map((n) => (set.has(n.id) ? { ...n, updatedAt: t } : n)));
+  }, []);
+
   const updateNodeData = useCallback((id, patch) => {
     // Linked notes (data.source) stay attached: on save the server mirrors
     // title/note/color edits back to the annotation, and only detaches the
     // note if the quoted text itself was rewritten.
     setNodes((ns) =>
-      ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...patch } } : n))
+      ns.map((n) =>
+        n.id === id ? { ...n, data: { ...n.data, ...patch }, updatedAt: Date.now() } : n
+      )
     );
   }, []);
 
   const updateNodeDims = useCallback((id, dims) => {
-    setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, ...dims } : n)));
+    setNodes((ns) =>
+      ns.map((n) => (n.id === id ? { ...n, ...dims, updatedAt: Date.now() } : n))
+    );
   }, []);
 
   const updateEdgeData = useCallback((id, patch) => {
@@ -1061,6 +1077,7 @@ function Board({
             }
           }}
           onNodeDoubleClick={(_e, node) => setMaxNodeId(node.id)}
+          onNodeDragStop={(_e, _node, dragged) => stampNodes(dragged.map((n) => n.id))}
           onPaneClick={onPaneClick}
           onInit={onInit}
           onMove={onMove}

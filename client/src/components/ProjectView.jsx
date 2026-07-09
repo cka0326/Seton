@@ -15,6 +15,31 @@ const newId = (prefix) =>
 const slug = (s) =>
   s.toLowerCase().replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32);
 
+// Pick a free spot just to the right of `anchor` for a new note, nudging it down
+// past anything already there so the sent note lands next to (not on top of) the
+// last-modified node (issue #30).
+const placeNear = (nodes, anchor) => {
+  const GAP = 48;
+  const w = DEFAULT_NODE.width;
+  const h = DEFAULT_NODE.height;
+  const x = anchor.position.x + (anchor.width || DEFAULT_NODE.width) + GAP;
+  let y = anchor.position.y;
+  const overlaps = (py) =>
+    nodes.some((n) => {
+      const nw = n.width || DEFAULT_NODE.width;
+      const nh = n.height || DEFAULT_NODE.height;
+      return (
+        x < n.position.x + nw &&
+        x + w > n.position.x &&
+        py < n.position.y + nh &&
+        py + h > n.position.y
+      );
+    });
+  let guard = 0;
+  while (overlaps(y) && guard++ < 200) y += h + 16;
+  return { x, y };
+};
+
 export default function ProjectView({ projectId, theme, onToggleTheme, onClose, onMissing }) {
   const [project, setProject] = useState(null);
   const [activeCid, setActiveCid] = useState(null);
@@ -251,22 +276,37 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
         content,
         color: HL_TO_NODE_COLOR[color] || existing.data.color,
       };
+      existing.updatedAt = Date.now();
       await api.saveCanvas(projectId, canvas);
       refreshStats();
       showToast(`Note updated on “${name}”`);
       return { canvasId: cid, nodeId: existing.id };
     }
 
-    const bottom = nodes.reduce(
-      (m, n) => Math.max(m, n.position.y + (n.height || DEFAULT_NODE.height)),
-      0
+    // drop the note next to the most recently touched node so it lands where
+    // the user is working; fall back to stacking at the bottom-left on a canvas
+    // with no timestamped nodes yet (issue #30)
+    const anchor = nodes.reduce(
+      (best, n) => (n.updatedAt && (!best || n.updatedAt > best.updatedAt) ? n : best),
+      null
     );
+    let position;
+    if (anchor) {
+      position = placeNear(nodes, anchor);
+    } else {
+      const bottom = nodes.reduce(
+        (m, n) => Math.max(m, n.position.y + (n.height || DEFAULT_NODE.height)),
+        0
+      );
+      position = { x: 0, y: bottom + 48 };
+    }
     const node = {
       id: newId('n'),
       type: 'note',
-      position: { x: 0, y: bottom + 48 },
+      position,
       width: DEFAULT_NODE.width,
       height: DEFAULT_NODE.height,
+      updatedAt: Date.now(),
       data: {
         title,
         content,
