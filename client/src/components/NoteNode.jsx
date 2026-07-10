@@ -26,6 +26,24 @@ function NoteNode({ id, data, selected }) {
     if (!recall) setRevealed(false);
   }, [recall]);
 
+  // `nowheel` on the body lets the wheel scroll overflowing note content, but
+  // it also blocks trackpad pinch-zoom (delivered as ctrl+wheel) whenever the
+  // cursor sits on a note. Flip the class per event — pinch (or a body with
+  // nothing to scroll) hands the wheel back to the canvas zoom. This runs in
+  // the capture phase, so the class is right before React Flow's zoom filter
+  // (which honors it) sees the event on the way back up.
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const onWheel = (e) => {
+      const pinch = e.ctrlKey || e.metaKey;
+      const scrollable = el.scrollHeight > el.clientHeight + 1;
+      el.classList.toggle('nowheel', !pinch && scrollable);
+    };
+    el.addEventListener('wheel', onWheel, { capture: true, passive: true });
+    return () => el.removeEventListener('wheel', onWheel, { capture: true });
+  }, []);
+
   // Measures — at `targetWidth` (or the current width when null) — the chrome
   // height (header + tags + borders) and the TRUE content height. The body is
   // briefly collapsed while reading scrollHeight because scrollHeight is floored

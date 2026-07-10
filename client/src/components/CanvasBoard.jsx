@@ -48,6 +48,16 @@ const newId = (prefix) =>
 // (`hidden` is only ever set by the temporary trace/filter views)
 const stripNode = ({ measured, selected, dragging, resizing, className, hidden, ...n }) => n;
 const stripEdge = ({ selected, ...e }) => e;
+
+// Undo an edge's temporary trace-mode anchoring/numbering/elevation: put the
+// real handles back and drop the transient props (no-op when untouched).
+function untraceEdge(e, savedHandles) {
+  const h = savedHandles?.get(e.id);
+  if (!h && e.data?.traceOrder == null && e.zIndex == null) return e;
+  const { zIndex, ...rest } = e;
+  const { traceOrder, ...data } = e.data || {};
+  return { ...rest, ...(h || {}), data };
+}
 const serialize = (nodes, edges) =>
   JSON.stringify([nodes.map(stripNode), edges.map(stripEdge)]);
 
@@ -260,8 +270,11 @@ function Board({
 
   // While a temporary view (trace mode / filter results) is active this holds
   // every node's real position; the view is display-only and must never be
-  // persisted, so saves map positions back through it.
+  // persisted, so saves map positions back through it. Trace mode also
+  // re-anchors edges for readability, so their real handles are kept the same
+  // way (and the transient trace numbering is stripped).
   const tempSaved = useRef(null); // Map<nodeId, {x, y}> | null
+  const tempEdgeSaved = useRef(null); // Map<edgeId, {sourceHandle, targetHandle}> | null
 
   const persist = useCallback(async () => {
     setSaveState('saving');
@@ -271,8 +284,12 @@ function Board({
           saved.has(n.id) ? { ...n, position: saved.get(n.id) } : n
         )
       : latest.current.nodes;
+    const savedH = tempEdgeSaved.current;
+    const sourceEdges = savedH
+      ? latest.current.edges.map((e) => untraceEdge(e, savedH))
+      : latest.current.edges;
     const cleanNodes = sourceNodes.map(stripNode);
-    const cleanEdges = latest.current.edges.map(stripEdge);
+    const cleanEdges = sourceEdges.map(stripEdge);
     try {
       await api.saveCanvas(projectId, {
         ...doc,
@@ -340,7 +357,12 @@ function Board({
   const onConnect = useCallback(
     (params) =>
       setEdges((es) =>
-        addEdge({ ...params, id: newId('e'), type: 'note', data: { label: '' } }, es)
+        addEdge(
+          // createdAt records connection order, so trace mode can number and
+          // stack a node's connections in the order they were made
+          { ...params, id: newId('e'), type: 'note', data: { label: '', createdAt: Date.now() } },
+          es
+        )
       ),
     []
   );
@@ -379,18 +401,31 @@ function Board({
 
   const restoreLayout = useCallback(() => {
     const saved = tempSaved.current;
+    const savedH = tempEdgeSaved.current;
     tempSaved.current = null;
+    tempEdgeSaved.current = null;
     filterViewRef.current = false;
+    if (savedH) setEdges((es) => es.map((e) => untraceEdge(e, savedH)));
     if (!saved) return;
     setNodes((ns) =>
-      ns.map((n) => ({ ...n, hidden: false, position: saved.get(n.id) || n.position }))
+      ns.map((n) => ({
+        ...n,
+        hidden: false,
+        className: undefined,
+        position: saved.get(n.id) || n.position,
+      }))
     );
     requestAnimationFrame(() => rf.fitView({ padding: 0.2, duration: 450 }));
   }, [rf]);
 
   // Show only `focusId` and its direct connections: incoming notes stacked on
   // the left, outgoing on the right, the focused note anchored at its real
-  // position. Clicking a neighbor re-traces from there (see onNodeClick).
+  // position. Neighbors stack in the order their connection was made (top =
+  // first), edges are temporarily re-anchored to the facing sides so every
+  // link reads left→right with no wrap-around, and edges at the focus carry a
+  // number badge showing connection order. All of it is display-only — real
+  // positions and handles are restored on exit. Clicking a neighbor re-traces
+  // from there (see onNodeClick).
   const traceFocus = useCallback(
     (focusId) => {
       captureOnce();
@@ -398,40 +433,122 @@ function Board({
       const byId = new Map(ns.map((n) => [n.id, n]));
       const focus = byId.get(focusId);
       if (!focus) return;
+      // Focus edges in the order the connections were made — data.createdAt
+      // when stamped (new edges), else array position (edges append on connect).
+      const focusEdges = [];
+      latest.current.edges.forEach((e, i) => {
+        if ((e.source === focusId) === (e.target === focusId)) return; // untouched or self-loop
+        focusEdges.push({ edge: e, ord: e.data?.createdAt ?? i });
+      });
+      focusEdges.sort((a, b) => a.ord - b.ord);
       const outgoing = new Set();
       const incoming = new Set();
-      for (const e of latest.current.edges) {
-        if (e.source === focusId && e.target !== focusId) outgoing.add(e.target);
-        else if (e.target === focusId && e.source !== focusId) incoming.add(e.source);
+      for (const { edge: e } of focusEdges) {
+        if (e.source === focusId) outgoing.add(e.target);
+        else incoming.add(e.source);
       }
       for (const id of outgoing) incoming.delete(id); // both ways → right side
 
       const anchor = tempSaved.current.get(focusId) || focus.position;
       const { w: fw, h: fh } = nodeSize(focus);
       const centerY = anchor.y + fh / 2;
-      const GAP = 48;
-      const COL = 150; // gap between the focus card and each column
+      const GAP = 48; // vertical gap within a column
+      const COLGAP = 90; // horizontal gap between columns on the same side
+      const COL = 150; // gap between the focus card and the first column
+      // Lay a side out as balanced columns rather than one tall stack: a note
+      // with 20 connections used to become a kilometer-high column that forced
+      // constant zooming. Column count targets a roughly square block per side;
+      // the first connections fill the column nearest the focus, top to bottom.
       const place = (ids, side) => {
         const arr = [...ids].map((id) => byId.get(id)).filter(Boolean);
-        const total =
-          arr.reduce((s, n) => s + nodeSize(n).h, 0) + GAP * Math.max(0, arr.length - 1);
-        let y = centerY - total / 2;
         const pos = new Map();
+        if (!arr.length) return pos;
+        const colW = Math.max(...arr.map((n) => nodeSize(n).w)) + COLGAP;
+        const totalH = arr.reduce((s, n) => s + nodeSize(n).h + GAP, 0);
+        const cols = Math.max(
+          1,
+          Math.min(arr.length, Math.round(Math.sqrt(totalH / colW)))
+        );
+        const targetH = totalH / cols;
+        const columns = [];
+        let cur = [];
+        let curH = 0;
         for (const n of arr) {
-          const { w, h } = nodeSize(n);
-          pos.set(n.id, { x: side === 'right' ? anchor.x + fw + COL : anchor.x - COL - w, y });
-          y += h + GAP;
+          cur.push(n);
+          curH += nodeSize(n).h + GAP;
+          if (curH >= targetH && columns.length < cols - 1) {
+            columns.push(cur);
+            cur = [];
+            curH = 0;
+          }
         }
+        if (cur.length) columns.push(cur);
+        columns.forEach((colNodes, ci) => {
+          const total =
+            colNodes.reduce((s, n) => s + nodeSize(n).h, 0) +
+            GAP * (colNodes.length - 1);
+          let y = centerY - total / 2;
+          for (const n of colNodes) {
+            const { w, h } = nodeSize(n);
+            // columns grow outward; left-side columns keep their focus-facing
+            // edge aligned so the connections stay short and parallel
+            const x =
+              side === 'right'
+                ? anchor.x + fw + COL + ci * colW
+                : anchor.x - COL - ci * colW - w;
+            pos.set(n.id, { x, y });
+            y += h + GAP;
+          }
+        });
         return pos;
       };
       const placed = new Map([...place(incoming, 'left'), ...place(outgoing, 'right')]);
       placed.set(focusId, anchor);
 
+      // Re-anchor visible edges to the sides facing each other in the trace
+      // layout (real handles are captured once and restored on exit), and
+      // number the focus's connections when there's more than one to follow.
+      const placedNodes = new Map(
+        [...placed].map(([id, pos]) => [id, { ...byId.get(id), position: pos }])
+      );
+      const orderNum = new Map(
+        focusEdges.length > 1 ? focusEdges.map(({ edge }, i) => [edge.id, i + 1]) : []
+      );
+      if (!tempEdgeSaved.current) tempEdgeSaved.current = new Map();
+      const savedHandles = tempEdgeSaved.current;
+      setEdges((es) =>
+        es.map((e) => {
+          const s = placedNodes.get(e.source);
+          const t = placedNodes.get(e.target);
+          if (!s || !t) return untraceEdge(e, null); // hidden — drop stale badge
+          if (!savedHandles.has(e.id)) {
+            savedHandles.set(e.id, {
+              sourceHandle: e.sourceHandle,
+              targetHandle: e.targetHandle,
+            });
+          }
+          const [sh, th] = facingHandles(s, t);
+          return {
+            ...e,
+            zIndex: 1000, // above the cards, so outer-column links stay visible
+            sourceHandle: sh,
+            targetHandle: th,
+            data: { ...e.data, traceOrder: orderNum.get(e.id) },
+          };
+        })
+      );
+
       setNodes((prev) =>
         prev.map((n) =>
           placed.has(n.id)
-            ? { ...n, hidden: false, position: placed.get(n.id), selected: n.id === focusId }
-            : { ...n, hidden: true, selected: false }
+            ? {
+                ...n,
+                hidden: false,
+                position: placed.get(n.id),
+                selected: n.id === focusId,
+                className: n.id === focusId ? 'trace-focus' : undefined,
+              }
+            : { ...n, hidden: true, selected: false, className: undefined }
         )
       );
       requestAnimationFrame(() =>
@@ -677,7 +794,7 @@ function Board({
           sourceHandle: sh,
           targetHandle: th,
           type: 'note',
-          data: { label: '' },
+          data: { label: '', createdAt: Date.now() },
         });
       }
       return added.length ? es.concat(added) : es;
@@ -690,9 +807,11 @@ function Board({
   const runLayout = useCallback(
     (layoutFn) => {
       // arranging commits a real layout — leave any temporary view first so
-      // the arrange isn't reverted by its restore
+      // the arrange isn't reverted by its restore (retargetEdges below picks
+      // fresh anchors, so the captured trace handles are dropped too)
       if (traceRef.current) setTrace(null);
       tempSaved.current = null;
+      tempEdgeSaved.current = null;
       filterViewRef.current = false;
       setFilter('');
       const allNodes = latest.current.nodes;
@@ -720,7 +839,8 @@ function Board({
       setNodes(merged);
       // edges keep whatever anchors they were drawn with; after moving nodes
       // those anchors are stale, so re-route each moved edge to facing sides
-      setEdges((es) => retargetEdges(merged, es));
+      // (untraceEdge drops any leftover trace-order badges first)
+      setEdges((es) => retargetEdges(merged, es.map((e) => untraceEdge(e, null))));
       requestAnimationFrame(() =>
         rf.fitView({
           padding: 0.2,
@@ -1118,7 +1238,7 @@ function Board({
                 <strong>
                   {nodes.find((n) => n.id === trace.focusId)?.data?.title || 'note'}
                 </strong>
-                {' '}— in on the left, out on the right · click a note to walk · Esc to step back
+                {' '}— in on the left, out on the right, numbered in connection order · click a note to walk · Esc to step back
               </span>
             ) : (
               <span>Trace mode — click a note to see its connections · Esc to exit</span>

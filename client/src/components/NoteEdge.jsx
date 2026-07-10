@@ -46,15 +46,19 @@ export default function NoteEdge({
           strokeWidth: selected ? 2.2 : 1.6,
         }}
       />
-      {data?.label ? (
+      {data?.label || data?.traceOrder ? (
         <EdgeLabelRenderer>
           <div
-            className={`edge-label ${selected ? 'selected' : ''} nodrag nopan`}
+            className="edge-label-stack nodrag nopan"
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
             }}
           >
-            {data.label}
+            {/* trace mode: connection-order badge (1 = connected first) */}
+            {data?.traceOrder ? <span className="edge-order">{data.traceOrder}</span> : null}
+            {data?.label ? (
+              <div className={`edge-label ${selected ? 'selected' : ''}`}>{data.label}</div>
+            ) : null}
           </div>
         </EdgeLabelRenderer>
       ) : null}
