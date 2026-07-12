@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import ThemeToggle from './ThemeToggle.jsx';
 import Icon from './Icon.jsx';
+import { confirmDialog } from '../lib/confirm.js';
 
 export default function ProjectList({ onOpen, theme, onToggleTheme }) {
   const [projects, setProjects] = useState(null);
@@ -38,7 +39,7 @@ export default function ProjectList({ onOpen, theme, onToggleTheme }) {
   };
 
   const remove = async (p) => {
-    if (!confirm(`Delete project "${p.name}" and all its notes? This cannot be undone.`)) return;
+    if (!(await confirmDialog(`Delete project "${p.name}" and all its notes? This cannot be undone.`))) return;
     await api.deleteProject(p.id);
     load();
   };

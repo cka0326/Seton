@@ -38,6 +38,11 @@ export const api = {
     }),
   deleteCanvas: (pid, cid) =>
     req(`/api/projects/${pid}/canvases/${cid}`, { method: 'DELETE' }),
+  importCanvases: (pid, bundle) =>
+    req(`/api/projects/${pid}/canvases/import`, {
+      method: 'POST',
+      body: JSON.stringify(bundle),
+    }),
 
   listDocs: (pid) => req(`/api/projects/${pid}/documents`),
   createDoc: (pid, doc) =>

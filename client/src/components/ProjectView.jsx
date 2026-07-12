@@ -5,9 +5,11 @@ import SearchPanel from './SearchPanel.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
 import DocumentReader from './DocumentReader.jsx';
 import AddDocModal from './AddDocModal.jsx';
+import AiToolsModal from './AiToolsModal.jsx';
 import Icon from './Icon.jsx';
 import { DEFAULT_NODE, HL_TO_NODE_COLOR } from '../constants.js';
 import { fmtDuration } from '../lib/time.js';
+import { confirmDialog } from '../lib/confirm.js';
 
 const newId = (prefix) =>
   `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -56,6 +58,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   const readerScroll = useRef(0); // live scroll offset inside the open reader
   const canvasViewports = useRef({}); // canvasId → last {x, y, zoom}, kept across board remounts
   const [addingDoc, setAddingDoc] = useState(false);
+  const [aiToolsOpen, setAiToolsOpen] = useState(false);
   const [editing, setEditing] = useState(null); // {type:'project'|'canvas'|'doc', id, value}
   const [sidebarOpen, setSidebarOpen] = useState(
     () => localStorage.getItem('seton:sidebarOpen') !== '0'
@@ -205,7 +208,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   };
 
   const deleteCanvas = async (c) => {
-    if (!confirm(`Delete canvas "${c.name}" and its notes?`)) return;
+    if (!(await confirmDialog(`Delete canvas "${c.name}" and its notes?`))) return;
     await api.deleteCanvas(projectId, c.id);
     const p = await refreshMeta();
     if (!p) return;
@@ -220,10 +223,25 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   };
 
   const deleteDocFromList = async (d) => {
-    if (!confirm(`Delete "${d.title}" with its highlights and notes?`)) return;
+    if (!(await confirmDialog(`Delete "${d.title}" with its highlights and notes?`))) return;
     await api.deleteDoc(projectId, d.id);
     if (openDocId === d.id) setOpenDocId(null);
     refreshDocs();
+  };
+
+  // Canvases uploaded through the AI tools panel — refresh and open the first.
+  const handleImportedCanvases = async (created) => {
+    setAiToolsOpen(false);
+    await refreshMeta();
+    refreshStats();
+    if (created?.length) {
+      openCanvas(created[0].id);
+      showToast(
+        created.length === 1
+          ? `Canvas “${created[0].name}” added`
+          : `${created.length} canvases added`
+      );
+    }
   };
 
   const createDoc = async ({ title, content }) => {
@@ -569,6 +587,16 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
         </div>
 
         <div className="sidebar-section">
+          <button
+            className={`side-btn ${aiToolsOpen ? 'active' : ''}`}
+            onClick={() => setAiToolsOpen(true)}
+            title="Export canvases or documents for an AI assistant, download the prompts, and upload the result"
+          >
+            <Icon name="sparkle" size={14} /> AI tools
+          </button>
+        </div>
+
+        <div className="sidebar-section">
           <div className="sidebar-section-head"><span>Export project</span></div>
           <div className="export-row">
             <a className="btn ghost small" href={`/api/projects/${projectId}/export.json`}>
@@ -602,6 +630,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
             <span><kbd>n</kbd> new note</span>
             <span><kbd>e</kbd> edit</span>
             <span><kbd>⌘D</kbd> duplicate</span>
+            <span><kbd>⌘G</kbd> group</span>
             <span><kbd>l</kbd> link</span>
             <span><kbd>/</kbd> filter</span>
             <span><kbd>r</kbd> recall</span>
@@ -687,6 +716,16 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
 
       {addingDoc && (
         <AddDocModal onCreate={createDoc} onClose={() => setAddingDoc(false)} />
+      )}
+
+      {aiToolsOpen && (
+        <AiToolsModal
+          projectId={projectId}
+          canvases={project.canvases}
+          docs={docs}
+          onImported={handleImportedCanvases}
+          onClose={() => setAiToolsOpen(false)}
+        />
       )}
 
       {toast && <div className="toast">{toast}</div>}

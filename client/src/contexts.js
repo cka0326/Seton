@@ -11,3 +11,7 @@ export const OpenSourceContext = createContext(null);
 // Lets a note node resize itself (auto-fit button, resize-end whitespace trim):
 // (id, { width?, height? }) => void.
 export const NodeSizeContext = createContext(null);
+
+// Broadcast from the board's "Fit" button: every mounted note auto-fits to its
+// content when the timestamp changes. Value: { ts } | null.
+export const FitAllContext = createContext(null);

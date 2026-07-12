@@ -22,7 +22,7 @@ import NoteModal from './NoteModal.jsx';
 import Icon from './Icon.jsx';
 import { api } from '../api.js';
 import { DEFAULT_NODE, KINDS, NODE_COLORS } from '../constants.js';
-import { NodeSizeContext, OpenSourceContext, RecallContext } from '../contexts.js';
+import { FitAllContext, NodeSizeContext, OpenSourceContext, RecallContext } from '../contexts.js';
 import { fileToImage, imageFilesFromEvent, imageMarkdown } from '../lib/image.js';
 
 const nodeTypes = { note: NoteNode };
@@ -382,6 +382,80 @@ function Board({
     setSelNodeId(sn[0]?.id || null);
     setSelEdgeId(se[0]?.id || null);
     setSelCount(sn.length);
+
+    // Grouped notes select as one (PowerPoint-style): selecting any member
+    // pulls in the rest of its group, so drag/delete/duplicate treat the
+    // group as a unit. Skipped in trace mode, which manages selection itself.
+    if (traceRef.current) return;
+    const groups = new Set(sn.map((n) => n.data?.group).filter(Boolean));
+    if (!groups.size) return;
+    const missing = latest.current.nodes
+      .filter((n) => groups.has(n.data?.group) && !ids.has(n.id))
+      .map((n) => n.id);
+    if (!missing.length) return;
+    const missingSet = new Set(missing);
+    setNodes((ns) =>
+      ns.map((n) => (missingSet.has(n.id) ? { ...n, selected: true } : n))
+    );
+  }, []);
+
+  // ----- groups (issue: move nodes together, like PowerPoint) --------------
+  // A group is just a shared data.group id. Selection expansion above makes
+  // the group act as one; the drag handlers below cover the case where a drag
+  // starts in the same gesture as the click, before the expansion lands.
+
+  const groupSelection = useCallback(() => {
+    const ids = new Set(selectedRef.current.nodes);
+    if (ids.size < 2) return;
+    const gid = newId('g');
+    const t = Date.now();
+    setNodes((ns) =>
+      ns.map((n) =>
+        ids.has(n.id) ? { ...n, updatedAt: t, data: { ...n.data, group: gid } } : n
+      )
+    );
+  }, []);
+
+  const ungroupSelection = useCallback(() => {
+    const ids = new Set(selectedRef.current.nodes);
+    if (!ids.size) return;
+    const t = Date.now();
+    setNodes((ns) =>
+      ns.map((n) => {
+        if (!ids.has(n.id) || !n.data?.group) return n;
+        const { group, ...data } = n.data;
+        return { ...n, updatedAt: t, data };
+      })
+    );
+  }, []);
+
+  // Group mates that React Flow isn't dragging natively (drag began before
+  // the selection expanded) follow the dragged node by the same delta.
+  const groupDrag = useRef(null); // { baseId, base:{x,y}, mates:[{id,pos}] } | null
+  const onNodeDragStart = useCallback((_e, node, dragged) => {
+    groupDrag.current = null;
+    const draggedIds = new Set(dragged.map((n) => n.id));
+    const groups = new Set(dragged.map((n) => n.data?.group).filter(Boolean));
+    if (!groups.size) return;
+    const mates = latest.current.nodes
+      .filter((n) => groups.has(n.data?.group) && !draggedIds.has(n.id))
+      .map((n) => ({ id: n.id, pos: { ...n.position } }));
+    if (mates.length) {
+      groupDrag.current = { baseId: node.id, base: { ...node.position }, mates };
+    }
+  }, []);
+  const onNodeDrag = useCallback((_e, node) => {
+    const d = groupDrag.current;
+    if (!d || node.id !== d.baseId) return;
+    const dx = node.position.x - d.base.x;
+    const dy = node.position.y - d.base.y;
+    const byId = new Map(d.mates.map((m) => [m.id, m.pos]));
+    setNodes((ns) =>
+      ns.map((n) => {
+        const pos = byId.get(n.id);
+        return pos ? { ...n, position: { x: pos.x + dx, y: pos.y + dy } } : n;
+      })
+    );
   }, []);
 
   // ----- temporary views: trace mode & filter results -----------------------
@@ -750,10 +824,17 @@ function Board({
     [rf, addNoteAt]
   );
 
-  // Duplicate the selected note(s) with a small offset (Ctrl/Cmd+D)
+  // Duplicate the selected note(s) with a small offset (Ctrl/Cmd+D). Copies of
+  // grouped notes form their own new group(s) instead of joining the original.
   const duplicateSelection = useCallback(() => {
     const ids = new Set(selectedRef.current.nodes);
     if (!ids.size) return;
+    const gmap = new Map();
+    const mapGroup = (g) => {
+      if (!g) return undefined;
+      if (!gmap.has(g)) gmap.set(g, newId('g'));
+      return gmap.get(g);
+    };
     setNodes((ns) => {
       const copies = ns
         .filter((n) => ids.has(n.id))
@@ -763,7 +844,7 @@ function Board({
           position: { x: n.position.x + 36, y: n.position.y + 36 },
           selected: true,
           updatedAt: Date.now(),
-          data: { ...n.data, tags: [...(n.data?.tags || [])] },
+          data: { ...n.data, tags: [...(n.data?.tags || [])], group: mapGroup(n.data?.group) },
         }));
       if (!copies.length) return ns;
       return ns.map((n) => ({ ...n, selected: false })).concat(copies);
@@ -856,6 +937,20 @@ function Board({
   const arrangeLR = useCallback(() => runLayout((n, e) => layoutNodes(n, e, 'LR')), [runLayout]);
   const arrangeGrid = useCallback(() => runLayout(layoutGrid), [runLayout]);
 
+  // Auto-size every note on the canvas to fit its content (the per-note
+  // auto-fit, canvas-wide). Hidden notes aren't mounted, so any temporary
+  // trace/filter view is left first; the signal fires once everything is
+  // rendered again (double RAF: state commit, then layout).
+  const [fitSignal, setFitSignal] = useState(null);
+  const fitAll = useCallback(() => {
+    if (traceRef.current) setTrace(null);
+    if (tempSaved.current) restoreLayout();
+    setFilter('');
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => setFitSignal({ ts: Date.now() }))
+    );
+  }, [restoreLayout]);
+
   const deselectAll = useCallback(() => {
     // A focused node re-selects itself, so blur it before clearing selection.
     const active = document.activeElement;
@@ -882,6 +977,9 @@ function Board({
   // keyboard shortcuts (deletion is handled by React Flow's deleteKeyCode)
   useEffect(() => {
     const onKey = (e) => {
+      // an in-app confirm dialog owns the keyboard — don't delete nodes or
+      // run shortcuts underneath it
+      if (document.querySelector('.confirm-backdrop')) return;
       const el = e.target;
       const typing =
         el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
@@ -943,6 +1041,14 @@ function Board({
         return;
       }
 
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'g' || e.key === 'G')) {
+        if (typing) return;
+        e.preventDefault(); // don't trigger the browser find-again dialog
+        if (e.shiftKey) ungroupSelection();
+        else groupSelection();
+        return;
+      }
+
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (e.key === 'n') {
@@ -966,7 +1072,7 @@ function Board({
     // edge/node accessibility handler consumes the event
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [addNote, deselectAll, duplicateSelection, linkSelection, filter, enterTrace, exitTrace, restoreLayout]);
+  }, [addNote, deselectAll, duplicateSelection, linkSelection, groupSelection, ungroupSelection, filter, enterTrace, exitTrace, restoreLayout]);
 
   // Focus a node requested from search results or a highlight jump. On a
   // fresh mount React Flow isn't initialized yet and its initial fitView
@@ -1070,6 +1176,14 @@ function Board({
     return () => clearTimeout(t);
   }, [q, applyFilterView, restoreLayout]);
 
+  // One toolbar toggle covers both: a selection that is exactly one whole
+  // group offers Ungroup, anything else (2+ notes) offers Group.
+  const selectedNodes = nodes.filter((n) => n.selected);
+  const canUngroup =
+    selectedNodes.length >= 2 &&
+    selectedNodes.every((n) => n.data?.group) &&
+    new Set(selectedNodes.map((n) => n.data.group)).size === 1;
+
   const selNode = selNodeId ? nodes.find((n) => n.id === selNodeId) : null;
   const selEdge = !selNode && selEdgeId ? edges.find((e) => e.id === selEdgeId) : null;
   const maxNode = maxNodeId ? nodes.find((n) => n.id === maxNodeId) : null;
@@ -1088,22 +1202,34 @@ function Board({
     <RecallContext.Provider value={recall}>
       <OpenSourceContext.Provider value={onOpenSource || null}>
       <NodeSizeContext.Provider value={updateNodeDims}>
+      <FitAllContext.Provider value={fitSignal}>
       <div
         className={`board ${recall ? 'recall-mode' : ''}`}
         onDrop={onBoardDrop}
         onDragOver={onBoardDragOver}
       >
         <div className="board-toolbar">
-          {Object.entries(KINDS).map(([k, v]) => (
-            <button
-              key={k}
-              className="ghost"
-              title={`Add ${v.label} (n adds a plain note; double-click canvas also works)`}
-              onClick={() => addNote(k)}
+          {/* one compact picker instead of five buttons — choosing a kind adds
+              that note (n / double-click still add a plain note) */}
+          <label
+            className="kind-add"
+            title="Add a note of a chosen kind (n adds a plain note; double-click canvas also works)"
+          >
+            <Icon name="plus" />
+            <span className="btn-label">Add</span>
+            <select
+              value=""
+              onChange={(e) => {
+                if (e.target.value) addNote(e.target.value);
+                e.target.blur();
+              }}
             >
-              <Icon name={v.icon} /><span className="btn-label"> {v.label}</span>
-            </button>
-          ))}
+              <option value="" disabled hidden />
+              {Object.entries(KINDS).map(([k, v]) => (
+                <option key={k} value={k}>{v.label}</option>
+              ))}
+            </select>
+          </label>
           <span className="tb-sep" />
           <button
             className="ghost"
@@ -1135,11 +1261,30 @@ function Board({
             <Icon name="link" /><span className="btn-label"> Link</span>
           </button>
           <button
+            className={`ghost ${canUngroup ? 'active' : ''}`}
+            onClick={canUngroup ? ungroupSelection : groupSelection}
+            disabled={selCount < 2}
+            title={
+              canUngroup
+                ? 'Ungroup the selected notes (⌘⇧G)'
+                : 'Group selected notes so they select and move together (⌘G)'
+            }
+          >
+            <Icon name="group" /><span className="btn-label"> {canUngroup ? 'Ungroup' : 'Group'}</span>
+          </button>
+          <button
             className={`ghost ${trace ? 'active' : ''}`}
             onClick={() => (trace ? exitTrace() : enterTrace())}
             title="Trace mode: click a note to see just its connections, laid out around it (t)"
           >
             <Icon name="route" /><span className="btn-label"> Trace</span>
+          </button>
+          <button
+            className="ghost"
+            onClick={fitAll}
+            title="Auto-size every note on the canvas to fit its content"
+          >
+            <Icon name="autofit" /><span className="btn-label"> Fit</span>
           </button>
           <div className="spacer" />
           <input
@@ -1197,7 +1342,16 @@ function Board({
             }
           }}
           onNodeDoubleClick={(_e, node) => setMaxNodeId(node.id)}
-          onNodeDragStop={(_e, _node, dragged) => stampNodes(dragged.map((n) => n.id))}
+          onNodeDragStart={onNodeDragStart}
+          onNodeDrag={onNodeDrag}
+          onNodeDragStop={(_e, _node, dragged) => {
+            const ids = dragged.map((n) => n.id);
+            if (groupDrag.current) {
+              ids.push(...groupDrag.current.mates.map((m) => m.id));
+              groupDrag.current = null;
+            }
+            stampNodes(ids);
+          }}
           onPaneClick={onPaneClick}
           onInit={onInit}
           onMove={onMove}
@@ -1265,6 +1419,7 @@ function Board({
           />
         )}
       </div>
+      </FitAllContext.Provider>
       </NodeSizeContext.Provider>
       </OpenSourceContext.Provider>
     </RecallContext.Provider>

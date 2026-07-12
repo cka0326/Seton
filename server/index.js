@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './db.js';
 import { createSync } from './sync.js';
 import { canvasToMarkdown, docToMarkdown, projectToMarkdown } from './markdown.js';
+import { MERGE_CANVASES_PROMPT, DOC_TO_CANVAS_PROMPT } from './prompts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
@@ -454,6 +455,62 @@ app.get('/api/projects/:pid/documents/:did/export.md', wrap(async (req, res) => 
     'text/markdown', docToMarkdown(doc));
 }));
 
+// ---------- AI exchange (issue #32) ----------
+// Lossless JSON exports + downloadable prompts for standalone AI workflows:
+// the user hands an export and a prompt to any assistant and uploads the
+// resulting seton-canvases/v1 file via POST /canvases/import below.
+
+// Bundle of selected canvases (?ids=a,b,c) or all of them when ids is absent.
+app.get('/api/projects/:pid/export/canvases.json', wrap(async (req, res) => {
+  const project = mustProject(req.params.pid);
+  const ids = (req.query.ids || '').toString().split(',').map((s) => s.trim()).filter(Boolean);
+  const all = store.listCanvases(project.id);
+  const canvases = ids.length ? all.filter((c) => ids.includes(c.id)) : all;
+  if (!canvases.length) throw httpError(404, 'no matching canvases');
+  download(
+    res,
+    `${project.name.replace(/[^\w-]+/g, '_')}.canvases.json`,
+    'application/json',
+    JSON.stringify({
+      format: 'seton-canvases/v1',
+      exportedAt: new Date().toISOString(),
+      project: project.name,
+      canvases: canvases.map(({ id, name, nodes, edges }) => ({ id, name, nodes, edges })),
+    }, null, 2)
+  );
+}));
+
+// Document + annotations, slimmed to what an assistant needs. docId/hlId are
+// included so generated notes can carry data.source back to the reader.
+app.get('/api/projects/:pid/documents/:did/export.json', wrap(async (req, res) => {
+  const doc = mustDoc(req.params.pid, req.params.did);
+  download(
+    res,
+    `${doc.title.replace(/[^\w-]+/g, '_')}.doc.json`,
+    'application/json',
+    JSON.stringify({
+      format: 'seton-doc/v1',
+      exportedAt: new Date().toISOString(),
+      docId: doc.id,
+      title: doc.title,
+      content: doc.content,
+      annotations: (doc.highlights || []).map((h) => ({
+        hlId: h.id,
+        quote: h.quote,
+        note: h.note || '',
+        title: h.title || '',
+        color: h.color,
+      })),
+    }, null, 2)
+  );
+}));
+
+app.get('/api/prompts/merge-canvases.md', (_req, res) =>
+  download(res, 'merge-canvases-prompt.md', 'text/markdown', MERGE_CANVASES_PROMPT));
+
+app.get('/api/prompts/doc-to-canvas.md', (_req, res) =>
+  download(res, 'doc-to-canvas-prompt.md', 'text/markdown', DOC_TO_CANVAS_PROMPT));
+
 // ---------- drive sync ----------
 
 app.get('/api/sync/status', wrap(async (_req, res) => {
@@ -488,6 +545,119 @@ app.post('/api/projects/import', wrap(async (req, res) => {
   });
   sync.schedule(project.id);
   res.status(201).json(project);
+}));
+
+// Keep in sync with NODE_COLORS / KINDS / DEFAULT_NODE in client/src/constants.js.
+const NODE_COLOR_NAMES = ['slate', 'blue', 'teal', 'green', 'amber', 'red', 'purple', 'pink'];
+const NODE_KINDS = ['note', 'question', 'definition', 'idea', 'resource'];
+const EDGE_HANDLES = ['t', 'r', 'b', 'l'];
+
+// Rebuild an uploaded canvas into the stored shape, tolerating the loose JSON
+// an assistant produces: defaults for missing fields, a grid position for
+// nodes without one, edges dropped unless both endpoints exist. data.source
+// is always stripped — reader links belong to manually sent notes, not to
+// AI-generated canvases (issue #32). The canvas always gets a fresh id so
+// uploads never clobber an existing canvas.
+function sanitizeCanvas(raw) {
+  const now = Date.now();
+  const num = (v, d) => (Number.isFinite(v) ? v : d);
+  const str = (v, d = '') => (typeof v === 'string' ? v : d);
+  const pick = (v, list, d) => (list.includes(v) ? v : d);
+
+  const nodes = [];
+  const ids = new Set();
+  (Array.isArray(raw.nodes) ? raw.nodes : []).forEach((n, i) => {
+    if (!n || typeof n !== 'object') return;
+    let id = str(n.id) || `n${i + 1}`;
+    while (ids.has(id)) id = `${id}-${i + 1}`;
+    ids.add(id);
+    const d = n.data || {};
+    const data = {
+      title: str(d.title),
+      content: str(d.content),
+      kind: pick(d.kind, NODE_KINDS, 'note'),
+      color: pick(d.color, NODE_COLOR_NAMES, 'slate'),
+      fontSize: num(d.fontSize, 14),
+      textAlign: pick(d.textAlign, ['left', 'center', 'right'], 'left'),
+      tags: Array.isArray(d.tags) ? d.tags.filter((t) => typeof t === 'string') : [],
+    };
+    // group ids survive a round-trip so exported groups stay grouped
+    if (typeof d.group === 'string' && d.group) data.group = d.group;
+    nodes.push({
+      id,
+      type: 'note',
+      position: {
+        x: num(n.position?.x, (i % 5) * 340),
+        y: num(n.position?.y, Math.floor(i / 5) * 240),
+      },
+      width: num(n.width, 280),
+      height: num(n.height, 190),
+      updatedAt: now,
+      data,
+    });
+  });
+
+  const edges = [];
+  (Array.isArray(raw.edges) ? raw.edges : []).forEach((e, i) => {
+    if (!e || typeof e !== 'object') return;
+    if (!ids.has(e.source) || !ids.has(e.target) || e.source === e.target) return;
+    edges.push({
+      id: str(e.id) || `e${i + 1}`,
+      source: e.source,
+      target: e.target,
+      sourceHandle: pick(e.sourceHandle, EDGE_HANDLES, 'r'),
+      targetHandle: pick(e.targetHandle, EDGE_HANDLES, 'l'),
+      type: 'note',
+      data: { label: str(e.data?.label), createdAt: num(e.data?.createdAt, now + i) },
+    });
+  });
+
+  return {
+    id: newId(),
+    name: str(raw.name).trim() || 'Imported canvas',
+    createdAt: now,
+    updatedAt: now,
+    nodes,
+    edges,
+  };
+}
+
+// What the user actually uploads varies: the seton-canvases/v1 bundle the
+// prompts ask assistants for, but also an old single-canvas export (a bare
+// canvas object with no format field), a whole-project seton/v1 export, or a
+// bare array of canvases. Accept them all — reject only shapes that clearly
+// hold no canvases.
+function canvasesFromUpload(body) {
+  if (!body || typeof body !== 'object') return null;
+  if (Array.isArray(body)) return body;
+  if (body.format === 'seton-canvases/v1' || body.format === 'seton/v1') {
+    return Array.isArray(body.canvases) ? body.canvases : null;
+  }
+  if (Array.isArray(body.nodes)) return [body]; // single .canvas.json export
+  return null;
+}
+
+// Upload canvases into an existing project — accepts the same format the
+// canvases export produces (and the prompts instruct assistants to emit).
+app.post('/api/projects/:pid/canvases/import', wrap(async (req, res) => {
+  mustProject(req.params.pid);
+  const raws = (canvasesFromUpload(req.body) || []).filter(
+    (c) => c && typeof c === 'object' && !Array.isArray(c)
+  );
+  if (!raws.length) {
+    throw httpError(400, 'no canvases found — expected a seton-canvases/v1 bundle or a canvas export');
+  }
+  const pid = req.params.pid;
+  const created = [];
+  store.transaction(() => {
+    for (const raw of raws) {
+      const canvas = sanitizeCanvas(raw);
+      store.saveCanvas(pid, canvas);
+      created.push({ id: canvas.id, name: canvas.name, nodeCount: canvas.nodes.length });
+    }
+  });
+  sync.schedule(pid);
+  res.status(201).json({ canvases: created });
 }));
 
 // ---------- static client (production / cloud) ----------

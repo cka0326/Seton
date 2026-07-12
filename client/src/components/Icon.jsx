@@ -137,6 +137,20 @@ const PATHS = {
       <rect x="14" y="14" width="7" height="7" rx="1.5" />
     </>
   ),
+  // grouped notes move together — two overlapping cards
+  group: (
+    <>
+      <rect x="3" y="3" width="13" height="13" rx="2" />
+      <path d="M20 8.5V19a1.5 1.5 0 0 1-1.5 1.5H8" />
+    </>
+  ),
+  // standalone AI workflows (issue #32) — a four-point spark with a companion
+  sparkle: (
+    <>
+      <path d="M11 4 12.8 9.2 18 11l-5.2 1.8L11 18l-1.8-5.2L4 11l5.2-1.8L11 4Z" />
+      <path d="M18.5 15.5l.8 1.7 1.7.8-1.7.8-.8 1.7-.8-1.7-1.7-.8 1.7-.8.8-1.7Z" />
+    </>
+  ),
   // fit a node's height to its content — frame corners + vertical collapse arrows
   autofit: (
     <>

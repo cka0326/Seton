@@ -536,6 +536,12 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   background: rgba(0, 0, 0, 0.08);
   color: #1c2230;
 }
+/* …but code inside a fenced block sits on the dark --code-bg, so keep the
+   light ink from .md pre instead of the card's dark inline-code ink */
+.note-node .md pre code {
+  background: transparent;
+  color: #dde2ec;
+}
 .note-node .md blockquote { color: #4a5468; }
 .note-node.selected {
   border-color: var(--accent);
@@ -572,6 +578,12 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   background: var(--bg-3);
   box-shadow: inset 0 0 0 1px var(--border);
   color: var(--muted);
+}
+.note-group-flag {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  opacity: 0.5;
 }
 .note-link-flag {
   display: inline-flex;
@@ -872,6 +884,29 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
 }
 .check input { width: auto; margin-top: 3px; }
 
+/* ---------- confirm dialog (lib/confirm.js) ---------- */
+
+.confirm-backdrop { z-index: 200; } /* above every other modal */
+.confirm-box {
+  width: min(420px, 92vw);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px 20px 16px;
+  box-shadow: var(--shadow-2);
+}
+.confirm-msg {
+  margin: 0 0 16px;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: break-word;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* ---------- modal (maximized note) ---------- */
 
 .modal-backdrop {
@@ -968,6 +1003,10 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
 .note-preview-card .md code {
   background: rgba(0, 0, 0, 0.08);
   color: #1c2230;
+}
+.note-preview-card .md pre code {
+  background: transparent;
+  color: #dde2ec;
 }
 .note-preview-card .md blockquote { color: #4a5468; }
 .note-preview-body { margin-top: 8px; }
@@ -1349,4 +1388,139 @@ mark.hl.hl-flash { animation: hl-flash 1.2s ease-out; }
 }
 @media (max-width: 900px) {
   .reader-notes { display: none; }
+}
+
+/* ---------- toolbar add-note kind picker ---------- */
+
+/* styled like a ghost button; the real <select> sits invisibly on top so a
+   click opens the native dropdown */
+.kind-add {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.kind-add:hover {
+  background: var(--bg-3);
+  border-color: var(--border);
+}
+.kind-add::after {
+  content: '';
+  width: 7px;
+  height: 7px;
+  margin-left: 1px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: rotate(45deg) translateY(-2px);
+  opacity: 0.7;
+}
+.kind-add select {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* ---------- AI tools modal (issue #32) ---------- */
+
+.modal.ai-tools {
+  width: min(620px, 95vw);
+  height: auto;
+  max-height: min(85vh, 780px);
+}
+.ai-tools-title {
+  flex: 1;
+  font-size: 18px;
+  font-weight: 600;
+}
+.ai-tools-body {
+  overflow-y: auto;
+  padding: 4px 0 12px;
+}
+.ai-intro {
+  margin: 10px 16px 4px;
+  line-height: 1.5;
+}
+.ai-tools-body .error { margin: 10px 16px 0; }
+.ai-step {
+  padding: 12px 16px 14px;
+}
+.ai-step + .ai-step { border-top: 1px solid var(--border); }
+.ai-step h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.ai-step p { margin-bottom: 10px; line-height: 1.5; }
+.ai-canvas-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.ai-canvas-picker label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.ai-canvas-picker label.checked {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.ai-canvas-picker input { accent-color: var(--accent); }
+.ai-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ai-doc-select {
+  max-width: 220px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+a.btn.disabled {
+  opacity: 0.45;
+  pointer-events: auto;
+  cursor: default;
+}
+
+/* ---------- document edit mode (issue #32) ---------- */
+
+.doc-edit {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.doc-edit-input {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+  resize: none;
+  padding: 22px 28px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.doc-edit-input:focus { border: none; }
+.doc-edit-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
 }

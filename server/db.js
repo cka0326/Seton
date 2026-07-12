@@ -229,6 +229,7 @@ export function createStore(dataDir) {
       if (touch) store.touchProject(pid);
       return doc;
     },
+    deleteDoc: (pid, did) => q.deleteDoc.run(pid, did),
   };
 
   migrateLegacyJSON(db, store, dataDir);

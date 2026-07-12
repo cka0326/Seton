@@ -3,7 +3,7 @@ import { Handle, Position, NodeResizer } from '@xyflow/react';
 import Markdown from './Markdown.jsx';
 import Icon from './Icon.jsx';
 import { NODE_COLORS, KINDS } from '../constants.js';
-import { NodeSizeContext, OpenSourceContext, RecallContext } from '../contexts.js';
+import { FitAllContext, NodeSizeContext, OpenSourceContext, RecallContext } from '../contexts.js';
 
 // Auto-size bounds. Width is kept in a readable band (never a thin column, never
 // a banner) so notes stay legible and don't hog canvas real estate; height then
@@ -82,11 +82,11 @@ function NoteNode({ id, data, selected }) {
     [measure]
   );
 
-  // Auto-fit button: grow/shrink the node to show all content with no scroll,
+  // Auto-fit: grow/shrink the node to show all content with no scroll,
   // balancing width and height so it doesn't become a thin column or a banner.
-  const autoSize = useCallback(
-    (e) => {
-      e.stopPropagation();
+  // Triggered per-note by the header button, or canvas-wide via FitAllContext.
+  const autoFit = useCallback(
+    () => {
       const el = nodeRef.current;
       const body = bodyRef.current;
       if (!el || !body || !setNodeDims) return;
@@ -108,6 +108,25 @@ function NoteNode({ id, data, selected }) {
     },
     [id, setNodeDims, measure, measureFitHeight]
   );
+
+  const autoSize = useCallback(
+    (e) => {
+      e.stopPropagation();
+      autoFit();
+    },
+    [autoFit]
+  );
+
+  // The board's "Fit" button broadcasts a timestamp; every mounted note
+  // re-fits itself to its content. Seeded with the mount-time value so a note
+  // added after a Fit click doesn't shrink itself on mount.
+  const fitSignal = useContext(FitAllContext);
+  const fitDone = useRef(fitSignal?.ts ?? null);
+  useEffect(() => {
+    if (!fitSignal || fitDone.current === fitSignal.ts) return;
+    fitDone.current = fitSignal.ts;
+    autoFit();
+  }, [fitSignal, autoFit]);
 
   // After a manual resize, never leave empty space below the content: trim the
   // height down to what the content needs (widening a sparse note used to keep
@@ -154,6 +173,14 @@ function NoteNode({ id, data, selected }) {
           <Icon name={kind.icon} size={13} />
         </span>
         <span className="note-title">{data.title || 'Untitled'}</span>
+        {data.group && (
+          <span
+            className="note-group-flag"
+            title="In a group — selecting it selects the whole group; ⌘⇧G ungroups"
+          >
+            <Icon name="group" size={11} />
+          </span>
+        )}
         {data.source && (
           <button
             className="note-link-flag nodrag"

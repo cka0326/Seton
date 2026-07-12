@@ -4,7 +4,9 @@ import Icon from './Icon.jsx';
 import { api } from '../api.js';
 import { HL_COLORS, HL_SWATCH } from '../constants.js';
 import { describeSelection, locate, paintHighlights } from '../lib/anchor.js';
+import { fileToImage, imageFilesFromEvent, imageMarkdown, insertAtCursor } from '../lib/image.js';
 import { fmtDuration } from '../lib/time.js';
+import { confirmDialog } from '../lib/confirm.js';
 
 const READ_TICK_MS = 5_000; // how often active reading time is counted
 const READ_IDLE_MS = 60_000; // no input for this long → the clock pauses
@@ -62,6 +64,7 @@ export default function DocumentReader({
   const [percent, setPercent] = useState(0);
   const [popover, setPopover] = useState(null); // {mode:'new'|'edit', ...}
   const [selHlId, setSelHlId] = useState(null); // card being edited inline in the panel
+  const [draft, setDraft] = useState(null); // non-null → editing the document body (issue #32)
   const [fontSize, setFontSize] = useState(
     () => Number(localStorage.getItem('seton:readerFont')) || 17
   );
@@ -86,6 +89,7 @@ export default function DocumentReader({
     restoredRef.current = false;
     setDoc(null);
     setPopover(null);
+    setDraft(null);
     setError('');
     api
       .getDoc(projectId, docId)
@@ -275,8 +279,78 @@ export default function DocumentReader({
     }, 500);
   };
 
+  // ----- edit mode (issue #32) -----
+  // The rendered article is swapped for a markdown textarea. On save the
+  // highlights re-anchor by quote + context (lib/anchor.js), so marks survive
+  // edits elsewhere in the text; a highlight whose passage was deleted stays
+  // in the panel but no longer paints.
+
+  const editRef = useRef(null);
+  const editReturnScroll = useRef(0);
+  const wasEditing = useRef(false);
+
+  const startEdit = () => {
+    editReturnScroll.current = scrollRef.current?.scrollTop || 0;
+    setPopover(null);
+    setSelHlId(null);
+    setDraft(doc.content);
+  };
+
+  const cancelEdit = async () => {
+    if (
+      draft !== doc.content &&
+      !(await confirmDialog('Discard your changes to this document?', { confirmLabel: 'Discard' }))
+    ) return;
+    setDraft(null);
+  };
+
+  const saveEdit = async () => {
+    try {
+      const saved = await api.saveDoc(projectId, docId, { content: draft });
+      setDoc(saved);
+      setDraft(null);
+      onMetaChange?.();
+    } catch (e) {
+      setError(`Save failed: ${e.message}`);
+    }
+  };
+
+  // Leaving edit mode remounts the article, so repaint the marks and put the
+  // scroll position back where reading stopped.
+  useLayoutEffect(() => {
+    if (draft != null) {
+      wasEditing.current = true;
+      return;
+    }
+    if (!wasEditing.current || !doc) return;
+    wasEditing.current = false;
+    if (contentRef.current) paintHighlights(contentRef.current, doc.highlights || []);
+    scrollRef.current?.scrollTo({ top: editReturnScroll.current, behavior: 'instant' });
+  }, [draft, doc]);
+
+  // Paste or drop an image into the editor → embed it inline at the caret,
+  // same as AddDocModal (issue #24).
+  const embedImages = async (e) => {
+    const files = imageFilesFromEvent(e);
+    if (!files.length) return;
+    e.preventDefault();
+    try {
+      const parts = [];
+      for (const f of files) parts.push(imageMarkdown((await fileToImage(f)).src));
+      const ta = editRef.current;
+      const { value, caret } = insertAtCursor(ta, parts.join('\n\n'));
+      setDraft(value);
+      requestAnimationFrame(() => {
+        ta.focus();
+        ta.setSelectionRange(caret, caret);
+      });
+    } catch (err) {
+      setError(err.message || 'Could not embed image');
+    }
+  };
+
   const deleteDoc = async () => {
-    if (!confirm(`Delete "${doc.title}" with its highlights and notes?`)) return;
+    if (!(await confirmDialog(`Delete "${doc.title}" with its highlights and notes?`))) return;
     await api.deleteDoc(projectId, docId);
     onMetaChange?.();
     onDeleted();
@@ -322,11 +396,14 @@ export default function DocumentReader({
         e.stopPropagation();
         e.target?.blur?.();
         setSelHlId(null);
+      } else if (draft != null) {
+        e.stopPropagation();
+        cancelEdit();
       }
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [popover, selHlId]);
+  }, [popover, selHlId, draft, doc?.content]);
 
   const addHighlight = (color, { openNote = false, send = false } = {}) => {
     const { sel } = popover;
@@ -481,6 +558,13 @@ export default function DocumentReader({
         >
           <Icon name="highlighter" />
         </button>
+        <button
+          className={`ghost ${draft != null ? 'active' : ''}`}
+          onClick={() => (draft != null ? cancelEdit() : startEdit())}
+          title={draft != null ? 'Stop editing' : 'Edit the document text'}
+        >
+          <Icon name="pencil" />
+        </button>
         <a
           className="btn ghost"
           href={`/api/projects/${projectId}/documents/${docId}/export.md`}
@@ -498,6 +582,43 @@ export default function DocumentReader({
 
       {error && <div className="error reader-error">{error}</div>}
 
+      {draft != null ? (
+        <div className="reader-body">
+          <div className="doc-edit">
+            <textarea
+              ref={editRef}
+              className="doc-edit-input"
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onPaste={embedImages}
+              onDrop={embedImages}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+                  e.preventDefault();
+                  saveEdit();
+                }
+              }}
+            />
+            <div className="doc-edit-foot">
+              <span className="muted small">
+                {draft.split(/\s+/).filter(Boolean).length.toLocaleString()} words
+                {' '}· highlights re-attach to their text after the edit
+              </span>
+              <div className="spacer" />
+              <button className="ghost" onClick={cancelEdit}>Cancel</button>
+              <button
+                className="primary"
+                disabled={draft === doc.content}
+                onClick={saveEdit}
+                title="Save (⌘S)"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
       <div className="reader-body">
         {tocOpen && toc.length > 0 && (
           <nav className="reader-toc">
@@ -650,6 +771,7 @@ export default function DocumentReader({
           </aside>
         )}
       </div>
+      )}
 
       {popover && popover.mode === 'new' && (
         <div
