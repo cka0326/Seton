@@ -251,6 +251,165 @@ function layoutGrid(nodes, edges) {
   return nodes.map((n) => ({ ...n, position: out.get(n.id) || n.position }));
 }
 
+// Undirected adjacency (in edge order) over the given nodes — layout helpers
+// only need structure; edge direction is untouched (edges are re-anchored to
+// facing handles after any layout, preserving source → target).
+function adjacency(nodes, edges) {
+  const ids = new Set(nodes.map((n) => n.id));
+  const adj = new Map(nodes.map((n) => [n.id, []]));
+  for (const e of edges) {
+    if (!ids.has(e.source) || !ids.has(e.target) || e.source === e.target) continue;
+    adj.get(e.source).push(e.target);
+    adj.get(e.target).push(e.source);
+  }
+  return adj;
+}
+
+// Snowflake (radial) layout: each connected component becomes a star — its
+// best-connected note in the center, the rest on rings outward by graph
+// distance. Angular room is split by subtree size so branches fan out without
+// tangling; components sit side by side.
+function layoutSnowflake(nodes, edges) {
+  if (nodes.length <= 1) return nodes.map((n) => ({ ...n }));
+  const adj = adjacency(nodes, edges);
+  let maxW = 0;
+  let maxH = 0;
+  for (const n of nodes) {
+    const s = nodeSize(n);
+    maxW = Math.max(maxW, s.w);
+    maxH = Math.max(maxH, s.h);
+  }
+  const seen = new Set();
+  const centers = new Map();
+  let offsetX = 0;
+  for (const startNode of nodes) {
+    if (seen.has(startNode.id)) continue;
+    const comp = [startNode.id];
+    seen.add(startNode.id);
+    for (let i = 0; i < comp.length; i++) {
+      for (const m of adj.get(comp[i])) {
+        if (!seen.has(m)) {
+          seen.add(m);
+          comp.push(m);
+        }
+      }
+    }
+    let root = comp[0];
+    for (const id of comp) {
+      if (adj.get(id).length > adj.get(root).length) root = id;
+    }
+    // BFS tree from the hub; extra (cycle) edges just draw across the rings
+    const depth = new Map([[root, 0]]);
+    const children = new Map(comp.map((id) => [id, []]));
+    const levelCount = new Map([[0, 1]]);
+    const bq = [root];
+    while (bq.length) {
+      const id = bq.shift();
+      for (const m of adj.get(id)) {
+        if (depth.has(m)) continue;
+        depth.set(m, depth.get(id) + 1);
+        levelCount.set(depth.get(m), (levelCount.get(depth.get(m)) || 0) + 1);
+        children.get(id).push(m);
+        bq.push(m);
+      }
+    }
+    // ring spacing: room for the cards, and for the most crowded ring at its
+    // radius (count cards on the circumference 2π·k·ring)
+    let ring = Math.max(maxW, maxH) + 100;
+    for (const [k, count] of levelCount) {
+      if (k > 0) ring = Math.max(ring, (count * (maxW + 48)) / (2 * Math.PI * k));
+    }
+    const leaves = new Map();
+    const countLeaves = (id) => {
+      let s = 0;
+      for (const k of children.get(id)) s += countLeaves(k);
+      leaves.set(id, s || 1);
+      return s || 1;
+    };
+    countLeaves(root);
+    const local = new Map();
+    const place = (id, a0, a1) => {
+      const d = depth.get(id);
+      const a = (a0 + a1) / 2;
+      local.set(id, { x: Math.cos(a) * d * ring, y: Math.sin(a) * d * ring });
+      let from = a0;
+      for (const k of children.get(id)) {
+        const span = ((a1 - a0) * leaves.get(k)) / leaves.get(id);
+        place(k, from, from + span);
+        from += span;
+      }
+    };
+    place(root, -Math.PI / 2, Math.PI * 1.5); // first branch points up
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    for (const p of local.values()) {
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y);
+    }
+    for (const [id, p] of local) {
+      centers.set(id, { x: p.x - minX + offsetX, y: p.y - minY });
+    }
+    offsetX += maxX - minX + maxW + 140;
+  }
+  return nodes.map((n) => {
+    const c = centers.get(n.id);
+    const { w, h } = nodeSize(n);
+    return { ...n, position: { x: c.x - w / 2, y: c.y - h / 2 } };
+  });
+}
+
+// Circle layout: every note on one ring, in depth-first order so connected
+// notes sit next to each other. Arc per note follows its size, so big cards
+// get more room; the radius grows until everything fits.
+function layoutCircle(nodes, edges) {
+  if (nodes.length <= 1) return nodes.map((n) => ({ ...n }));
+  const adj = adjacency(nodes, edges);
+  const order = [];
+  const seen = new Set();
+  for (const n of nodes) {
+    if (seen.has(n.id)) continue;
+    const stack = [n.id];
+    seen.add(n.id);
+    while (stack.length) {
+      const id = stack.pop();
+      order.push(id);
+      const kids = adj.get(id).filter((m) => !seen.has(m));
+      for (const m of kids) seen.add(m);
+      // reversed so the first connection comes off the stack first
+      for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+    }
+  }
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const arc = order.map((id) => {
+    const { w, h } = nodeSize(byId.get(id));
+    return Math.max(w, h) + 64;
+  });
+  const per = arc.reduce((s, a) => s + a, 0);
+  const r = Math.max(per / (2 * Math.PI), 260);
+  const pos = new Map();
+  let along = 0;
+  order.forEach((id, i) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * (along + arc[i] / 2)) / per;
+    along += arc[i];
+    const { w, h } = nodeSize(byId.get(id));
+    pos.set(id, { x: Math.cos(a) * r - w / 2, y: Math.sin(a) * r - h / 2 });
+  });
+  return nodes.map((n) => ({ ...n, position: pos.get(n.id) }));
+}
+
+// The auto-arrange menu ("Arrange" dropdown in the toolbar). Every layout only
+// moves nodes; edges keep their source → target and are re-anchored to facing
+// handles afterwards (retargetEdges), so connections and direction survive.
+const ARRANGE_LAYOUTS = {
+  tb: { label: 'Hierarchy ↓', fn: (n, e) => layoutNodes(n, e, 'TB') },
+  lr: { label: 'Hierarchy →', fn: (n, e) => layoutNodes(n, e, 'LR') },
+  grid: { label: 'Grid', fn: layoutGrid },
+  snowflake: { label: 'Snowflake', fn: layoutSnowflake },
+  circle: { label: 'Circle', fn: layoutCircle },
+};
+
 // Center of the bounding box of a set of nodes (in flow coords).
 function bboxCenter(nodes) {
   let minX = Infinity;
@@ -545,8 +704,11 @@ function Board({
   // With `deep`, the view widens from direct connections to the full context
   // closure (contextClosure) and lays it out as a left→right hierarchy, so a
   // downstream note's other feeders show up alongside it.
+  //
+  // `layout` (an ARRANGE_LAYOUTS key) restyles the trace view with any of the
+  // Arrange layouts — still display-only. Defaults: columns (shallow), lr (deep).
   const traceFocus = useCallback(
-    (focusId, deep = false) => {
+    (focusId, deep = false, layout = null) => {
       captureOnce();
       const ns = latest.current.nodes;
       const byId = new Map(ns.map((n) => [n.id, n]));
@@ -621,31 +783,36 @@ function Board({
         });
         return pos;
       };
+      // visible set: direct neighbors, or the full context closure in deep mode
+      const visibleIds = deep
+        ? contextClosure(focusId, latest.current.edges)
+        : new Set([focusId, ...incoming, ...outgoing]);
+      const lay =
+        layout && ARRANGE_LAYOUTS[layout] ? layout : deep ? 'lr' : 'columns';
       let placed;
-      if (deep) {
-        // full-context closure, laid out left→right by dagre (real positions
-        // as the starting point, so unconnected clusters keep their shape)
-        const ids = contextClosure(focusId, latest.current.edges);
+      if (lay === 'columns') {
+        placed = new Map([...place(incoming, 'left'), ...place(outgoing, 'right')]);
+        placed.set(focusId, anchor);
+      } else {
+        // any Arrange layout, applied to just the visible notes (real
+        // positions as the starting point, so clusters keep their shape) and
+        // pinned so the focus card stays where it really sits
         const subset = ns
-          .filter((n) => ids.has(n.id))
+          .filter((n) => visibleIds.has(n.id))
           .map((n) => ({
             ...n,
             position: tempSaved.current.get(n.id) || n.position,
           }));
         const subEdges = latest.current.edges.filter(
-          (e) => ids.has(e.source) && ids.has(e.target)
+          (e) => visibleIds.has(e.source) && visibleIds.has(e.target)
         );
-        const laid = layoutNodes(subset, subEdges, 'LR');
-        // keep the focus card where it really sits so the view doesn't jump
+        const laid = ARRANGE_LAYOUTS[lay].fn(subset, subEdges);
         const laidFocus = laid.find((n) => n.id === focusId);
         const dx = anchor.x - laidFocus.position.x;
         const dy = anchor.y - laidFocus.position.y;
         placed = new Map(
           laid.map((n) => [n.id, { x: n.position.x + dx, y: n.position.y + dy }])
         );
-      } else {
-        placed = new Map([...place(incoming, 'left'), ...place(outgoing, 'right')]);
-        placed.set(focusId, anchor);
       }
 
       // Re-anchor visible edges to the sides facing each other in the trace
@@ -708,7 +875,7 @@ function Board({
   const enterTrace = useCallback((deep = false) => {
     setFilter('');
     const start = selNodeIdRef.current;
-    setTrace({ focusId: start || null, deep });
+    setTrace({ focusId: start || null, deep, layout: null });
     if (start) {
       filterViewRef.current = false; // trace takes over any filter capture
       traceFocus(start, deep);
@@ -722,7 +889,7 @@ function Board({
     (id, deep = false) => {
       setFilter('');
       filterViewRef.current = false;
-      setTrace({ focusId: id, deep });
+      setTrace({ focusId: id, deep, layout: null });
       traceFocus(id, deep);
     },
     [traceFocus]
@@ -1014,9 +1181,23 @@ function Board({
     [rf]
   );
 
-  const arrangeTB = useCallback(() => runLayout((n, e) => layoutNodes(n, e, 'TB')), [runLayout]);
-  const arrangeLR = useCallback(() => runLayout((n, e) => layoutNodes(n, e, 'LR')), [runLayout]);
-  const arrangeGrid = useCallback(() => runLayout(layoutGrid), [runLayout]);
+  const arrange = useCallback(
+    (kind) => {
+      // during a focused trace, arranging restyles the trace view itself
+      // (display-only, restored on exit) instead of committing a real layout
+      if (traceRef.current?.focusId) {
+        const t = traceRef.current;
+        if (kind === 'columns' && t.deep) return; // columns is shallow-only
+        const layout = kind === 'columns' ? null : kind;
+        setTrace({ ...t, layout });
+        traceFocus(t.focusId, t.deep, layout);
+        return;
+      }
+      const opt = ARRANGE_LAYOUTS[kind];
+      if (opt) runLayout(opt.fn);
+    },
+    [runLayout, traceFocus]
+  );
 
   // Auto-size every note on the canvas to fit its content (the per-note
   // auto-fit, canvas-wide). Hidden notes aren't mounted, so any temporary
@@ -1079,7 +1260,7 @@ function Board({
         if (traceRef.current) {
           if (traceRef.current.focusId) {
             // step 1: leave the traced node, stay armed for the next click
-            setTrace({ focusId: null, deep: traceRef.current.deep });
+            setTrace({ ...traceRef.current, focusId: null });
             restoreLayout();
           } else {
             // step 2: leave trace mode entirely
@@ -1103,7 +1284,7 @@ function Board({
           setNodes((ns) => ns.filter((n) => !selNodes.has(n.id)));
           if (traceRef.current?.focusId && selNodes.has(traceRef.current.focusId)) {
             // the traced node is gone — fall back to the full canvas
-            setTrace({ focusId: null, deep: traceRef.current.deep });
+            setTrace({ ...traceRef.current, focusId: null });
             restoreLayout();
           }
         }
@@ -1332,27 +1513,34 @@ function Board({
             </select>
           </label>
           <span className="tb-sep" />
-          <button
-            className="ghost"
-            onClick={arrangeTB}
-            title="Auto-arrange into a hierarchy, top-down (selected notes only, or the whole canvas)"
+          {/* one dropdown for every auto-layout — connections and edge
+              direction are always preserved, only positions/anchors change */}
+          <label
+            className="kind-add"
+            title={
+              trace?.focusId
+                ? 'Re-arrange the trace view (display-only — the real layout comes back on exit)'
+                : 'Auto-arrange the canvas (or just the selected notes): hierarchy, grid, snowflake, circle'
+            }
           >
-            <Icon name="layout" /><span className="btn-label"> Arrange</span>
-          </button>
-          <button
-            className="ghost"
-            onClick={arrangeLR}
-            title="Auto-arrange left-to-right (selected notes only, or the whole canvas)"
-          >
-            <Icon name="layoutLR" /><span className="btn-label"> L→R</span>
-          </button>
-          <button
-            className="ghost"
-            onClick={arrangeGrid}
-            title="Auto-arrange into a compact grid that minimizes crossings (selected notes only, or the whole canvas)"
-          >
-            <Icon name="grid" /><span className="btn-label"> Grid</span>
-          </button>
+            <Icon name="layout" />
+            <span className="btn-label">Arrange</span>
+            <select
+              value=""
+              onChange={(e) => {
+                if (e.target.value) arrange(e.target.value);
+                e.target.blur();
+              }}
+            >
+              <option value="" disabled hidden />
+              {trace?.focusId && !trace.deep && (
+                <option value="columns">Trace columns</option>
+              )}
+              {Object.entries(ARRANGE_LAYOUTS).map(([k, v]) => (
+                <option key={k} value={k}>{v.label}</option>
+              ))}
+            </select>
+          </label>
           <button
             className="ghost"
             onClick={linkSelection}
@@ -1439,9 +1627,9 @@ function Board({
             // plain click walks the trace; modified clicks keep multi-select
             if (e.shiftKey || e.metaKey || e.ctrlKey) return;
             if (traceRef.current && traceRef.current.focusId !== node.id) {
-              const deep = traceRef.current.deep;
-              setTrace({ focusId: node.id, deep });
-              traceFocus(node.id, deep);
+              const { deep, layout } = traceRef.current;
+              setTrace({ focusId: node.id, deep, layout });
+              traceFocus(node.id, deep, layout);
             }
           }}
           onNodeDoubleClick={(_e, node) => setMaxNodeId(node.id)}
@@ -1577,7 +1765,7 @@ function Board({
                 const id = menu.nodeId;
                 setMenu(null);
                 if (traceRef.current?.focusId === id) {
-                  setTrace({ focusId: null, deep: traceRef.current.deep });
+                  setTrace({ ...traceRef.current, focusId: null });
                   restoreLayout();
                 }
                 deleteNode(id);
