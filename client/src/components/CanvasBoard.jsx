@@ -48,14 +48,13 @@ const newId = (prefix) =>
 const stripNode = ({ measured, selected, dragging, resizing, className, hidden, ...n }) => n;
 const stripEdge = ({ selected, ...e }) => e;
 
-// Undo an edge's temporary trace-mode anchoring/numbering/elevation: put the
-// real handles back and drop the transient props (no-op when untouched).
+// Undo an edge's temporary trace-mode anchoring/elevation: put the real
+// handles back and drop the transient zIndex (no-op when untouched).
 function untraceEdge(e, savedHandles) {
   const h = savedHandles?.get(e.id);
-  if (!h && e.data?.traceOrder == null && e.zIndex == null) return e;
+  if (!h && e.zIndex == null) return e;
   const { zIndex, ...rest } = e;
-  const { traceOrder, ...data } = e.data || {};
-  return { ...rest, ...(h || {}), data };
+  return { ...rest, ...(h || {}) };
 }
 const serialize = (nodes, edges) =>
   JSON.stringify([nodes.map(stripNode), edges.map(stripEdge)]);
@@ -431,11 +430,12 @@ function layoutCircle(nodes, edges) {
 // The auto-arrange menu ("Arrange" dropdown in the toolbar). Every layout only
 // moves nodes; edges keep their source → target and are re-anchored to facing
 // handles afterwards (retargetEdges), so connections and direction survive.
+// Snowflake leads: it's the default arrangement, listed first in the menu.
 const ARRANGE_LAYOUTS = {
+  snowflake: { label: 'Snowflake', fn: layoutSnowflake },
   tb: { label: 'Hierarchy ↓', fn: (n, e) => layoutNodes(n, e, 'TB') },
   lr: { label: 'Hierarchy →', fn: (n, e) => layoutNodes(n, e, 'LR') },
   grid: { label: 'Grid', fn: layoutGrid },
-  snowflake: { label: 'Snowflake', fn: layoutSnowflake },
   circle: { label: 'Circle', fn: layoutCircle },
 };
 
@@ -584,8 +584,9 @@ function Board({
     (params) =>
       setEdges((es) =>
         addEdge(
-          // createdAt records connection order, so trace mode can number and
-          // stack a node's connections in the order they were made
+          // createdAt records connection order, so trace mode can stack a
+          // node's connections — and edgeNumbers can order siblings — in the
+          // order they were made
           { ...params, id: newId('e'), type: 'note', data: { createdAt: Date.now() } },
           es
         )
@@ -720,9 +721,9 @@ function Board({
   // Show only `focusId` and its direct connections: incoming notes stacked on
   // the left, outgoing on the right, the focused note anchored at its real
   // position. Neighbors stack in the order their connection was made (top =
-  // first), edges are temporarily re-anchored to the facing sides so every
-  // link reads left→right with no wrap-around, and edges at the focus carry a
-  // number badge showing connection order. All of it is display-only — real
+  // first), and edges are temporarily re-anchored to the facing sides so every
+  // link reads left→right with no wrap-around (their outline-number badges
+  // stay as-is). All of it is display-only — real
   // positions and handles are restored on exit. Clicking a neighbor re-traces
   // from there (see onNodeClick).
   //
@@ -841,13 +842,10 @@ function Board({
       }
 
       // Re-anchor visible edges to the sides facing each other in the trace
-      // layout (real handles are captured once and restored on exit), and
-      // number the focus's connections when there's more than one to follow.
+      // layout (real handles are captured once and restored on exit). The
+      // outline-number badges keep labeling them — no trace-specific numbers.
       const placedNodes = new Map(
         [...placed].map(([id, pos]) => [id, { ...byId.get(id), position: pos }])
-      );
-      const orderNum = new Map(
-        focusEdges.length > 1 ? focusEdges.map(({ edge }, i) => [edge.id, i + 1]) : []
       );
       if (!tempEdgeSaved.current) tempEdgeSaved.current = new Map();
       const savedHandles = tempEdgeSaved.current;
@@ -868,7 +866,6 @@ function Board({
             zIndex: 1000, // above the cards, so outer-column links stay visible
             sourceHandle: sh,
             targetHandle: th,
-            data: { ...e.data, traceOrder: orderNum.get(e.id) },
           };
         })
       );
@@ -1529,7 +1526,7 @@ function Board({
             title={
               trace?.focusId
                 ? 'Re-arrange the trace view (display-only — the real layout comes back on exit)'
-                : 'Auto-arrange the canvas (or just the selected notes): hierarchy, grid, snowflake, circle'
+                : 'Auto-arrange the canvas (or just the selected notes): snowflake, hierarchy, grid, circle'
             }
           >
             <Icon name="layout" />
@@ -1716,7 +1713,7 @@ function Board({
                 </strong>
                 {trace.deep
                   ? ' — everything it feeds, plus every note feeding those · click a note to walk · Esc to step back'
-                  : ' — in on the left, out on the right, numbered in connection order · click a note to walk · Esc to step back'}
+                  : ' — in on the left, out on the right · click a note to walk · Esc to step back'}
               </span>
             ) : (
               <span>

@@ -796,8 +796,12 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
 
 /* edge number badge at the edge midpoint. NoteEdge scales it against the
    viewport zoom (transform-origin 0 0 keeps it centered while scaling), and
-   the renderer layer is lifted above nodes so badges are never buried. */
-.react-flow__edgelabel-renderer { z-index: 1001; }
+   the renderer layer is lifted above nodes AND every elevated edge so badges
+   are never buried: trace mode raises edges to 1000, and elevateEdgesOnSelect
+   can add another +1000 each for a selected edge and a selected endpoint
+   (~3000 worst case). The layer lives inside the viewport's stacking context,
+   so this large value can't leak above toolbars or modals. */
+.react-flow__edgelabel-renderer { z-index: 5000; }
 .edge-label-stack {
   position: absolute;
   transform-origin: 0 0;
@@ -806,7 +810,7 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   align-items: center;
   pointer-events: none;
 }
-/* outline number (1, 1.2, 2.1.3 …) — same pill as the trace-order badge */
+/* outline number pill (1, 1.2, 2.1.3 …) */
 .edge-order {
   display: inline-flex;
   align-items: center;

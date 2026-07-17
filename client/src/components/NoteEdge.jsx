@@ -14,7 +14,6 @@ export default function NoteEdge({
   targetY,
   sourcePosition,
   targetPosition,
-  data,
   selected,
   markerEnd,
   style,
@@ -30,10 +29,10 @@ export default function NoteEdge({
     targetPosition,
   });
 
-  // trace mode's connection-order badge wins while tracing; otherwise the
-  // auto-computed outline number (1, 1.1, 1.2.3 …) — display-only, derived
-  // from the graph in CanvasBoard, so it re-numbers itself as edges change
-  const badge = data?.traceOrder ?? edgeNums?.get(id);
+  // the auto-computed outline number (1, 1.1, 1.2.3 …) — display-only,
+  // derived from the graph in CanvasBoard, so it re-numbers itself as edges
+  // change; trace mode shows the same numbers, no separate ordering
+  const badge = edgeNums?.get(id);
   // counter the viewport zoom so the badge reads the same at every zoom level
   const scale = Math.min(1 / Math.max(zoom, 0.01), MAX_BADGE_SCALE);
 
@@ -69,9 +68,7 @@ export default function NoteEdge({
               transform: `translate(${labelX}px, ${labelY}px) scale(${scale}) translate(-50%, -50%)`,
             }}
           >
-            <span className={`edge-order ${data?.traceOrder ? '' : 'edge-num'}`}>
-              {badge}
-            </span>
+            <span className="edge-order">{badge}</span>
           </div>
         </EdgeLabelRenderer>
       )}
