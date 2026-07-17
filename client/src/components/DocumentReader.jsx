@@ -54,6 +54,7 @@ export default function DocumentReader({
   onMetaChange,
   onSendToCanvas,
   onViewInCanvas,
+  onConvertToCanvas,
 }) {
   const [doc, setDoc] = useState(null);
   const [error, setError] = useState('');
@@ -586,6 +587,19 @@ export default function DocumentReader({
           title={draft != null ? 'Stop editing' : 'Edit the document text'}
         >
           <Icon name="pencil" />
+        </button>
+        <button
+          className="ghost"
+          onClick={async () => {
+            try {
+              await onConvertToCanvas?.(docId);
+            } catch (e) {
+              setError(`Convert failed: ${e.message}`);
+            }
+          }}
+          title="Convert to a canvas: one note per section and sub-section, each topic connected to its subtopics"
+        >
+          <Icon name="layout" />
         </button>
         <a
           className="btn ghost"

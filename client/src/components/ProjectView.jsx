@@ -10,6 +10,7 @@ import Icon from './Icon.jsx';
 import { DEFAULT_NODE, HL_TO_NODE_COLOR } from '../constants.js';
 import { fmtDuration } from '../lib/time.js';
 import { confirmDialog } from '../lib/confirm.js';
+import { outlineCanvas } from '../lib/outline.js';
 
 const newId = (prefix) =>
   `${prefix}${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
@@ -347,6 +348,27 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
     return { canvasId: cid, nodeId: node.id };
   }, [projectId, activeCid, docs, openDocId, refreshStats, showToast]);
 
+  // Convert a library document into a new canvas: one note per section /
+  // sub-section, connected as the outline tree — topic → subtopic, recursively
+  // (lib/outline.js). A fresh snapshot each time — nodes aren't linked back.
+  const convertDocToCanvas = useCallback(
+    async (docId) => {
+      const d = await api.getDoc(projectId, docId);
+      const { nodes, edges } = outlineCanvas(d, d.title ? slug(d.title) : '');
+      if (!nodes.length) {
+        showToast('Nothing to convert — the document is empty');
+        return;
+      }
+      const c = await api.createCanvas(projectId, d.title || 'Untitled document');
+      await api.saveCanvas(projectId, { ...c, nodes, edges });
+      await refreshMeta();
+      refreshStats();
+      openCanvas(c.id);
+      showToast(`Canvas “${c.name}” created — ${nodes.length} notes from the outline`);
+    },
+    [projectId, refreshMeta, refreshStats, showToast]
+  );
+
   // Jump from a highlight to its note on the canvas, creating the note first
   // if the highlight was never sent. openCanvas records the reading position,
   // so the "back to note" chip can restore it afterwards.
@@ -679,6 +701,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
             onMetaChange={refreshDocs}
             onSendToCanvas={sendToCanvas}
             onViewInCanvas={viewHlOnCanvas}
+            onConvertToCanvas={convertDocToCanvas}
           />
         ) : doc ? (
           <CanvasBoard
