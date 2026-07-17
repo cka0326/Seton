@@ -8,6 +8,57 @@
 
 const CONTEXT = 32;
 
+// Structural blocks that should come out whole when a selection touches them —
+// a few highlighted cells are useless without the rest of the table.
+const SNAP = 'table, pre, ul, ol, blockquote';
+// Anything whose formatting a plain-text quote would lose.
+const RICH =
+  'table, pre, img, ul, ol, blockquote, h1, h2, h3, h4, h5, h6, hr, strong, em, del, code, a';
+
+// Innermost element carrying data-srcpos at a range endpoint, expanded to the
+// outermost structural block so tables/lists/code fences are captured whole.
+function srcposAt(container, offset, root, side) {
+  let node = container;
+  // element endpoints (triple-click) point between children — step onto the
+  // child actually inside the selection
+  if (node.nodeType === Node.ELEMENT_NODE && node.childNodes.length) {
+    const i = Math.min(
+      side === 'end' ? Math.max(offset - 1, 0) : offset,
+      node.childNodes.length - 1
+    );
+    node = node.childNodes[i] || node;
+  }
+  let el = node.nodeType === Node.TEXT_NODE ? node.parentElement : node;
+  el = el?.closest?.('[data-srcpos]') || null;
+  if (!el || !root.contains(el)) return null;
+  for (let cur = el.parentElement; cur && cur !== root; cur = cur.parentElement) {
+    if (cur.matches?.(SNAP) && cur.hasAttribute('data-srcpos')) el = cur;
+  }
+  return el;
+}
+
+// Markdown-source slice covering the selection, or null when the plain quote
+// is already faithful (text-only selection) or positions are unavailable.
+// Requires the content to be rendered with <Markdown sourcePos>.
+function markdownQuote(root, range, source) {
+  if (!source) return null;
+  const a = srcposAt(range.startContainer, range.startOffset, root, 'start');
+  const b = srcposAt(range.endContainer, range.endOffset, root, 'end');
+  if (!a || !b) return null;
+  // formatting inside the selection, or an endpoint inside a structural block
+  // (a partial code-block selection clones as bare text) → plain text lies
+  const rich =
+    range.cloneContents().querySelector(RICH) || a.matches(SNAP) || b.matches(SNAP);
+  if (!rich) return null;
+  const [s1, e1] = a.dataset.srcpos.split('-').map(Number);
+  const [s2, e2] = b.dataset.srcpos.split('-').map(Number);
+  const start = Math.min(s1, s2);
+  const end = Math.max(e1, e2);
+  if (!(end > start) || end > source.length) return null;
+  const md = source.slice(start, end).trim();
+  return md && md !== range.toString().trim() ? md : null;
+}
+
 function textNodesIn(root) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   const nodes = [];
@@ -18,7 +69,10 @@ function textNodesIn(root) {
 
 // Describe the current DOM selection relative to `root`.
 // Returns null when the selection is collapsed or escapes the root.
-export function describeSelection(root) {
+// When the markdown `source` is given (and the content was rendered with
+// <Markdown sourcePos>), also returns `quoteMd` — the exact source slice —
+// whenever the plain-text quote would lose formatting.
+export function describeSelection(root, source) {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
   const range = sel.getRangeAt(0);
@@ -45,6 +99,13 @@ export function describeSelection(root) {
   }
   if (end <= start) return null;
 
+  let quoteMd = null;
+  try {
+    quoteMd = markdownQuote(root, range, source);
+  } catch {
+    // srcpos mapping is best-effort — never let it break highlighting
+  }
+
   const text = root.textContent;
   return {
     start,
@@ -52,6 +113,7 @@ export function describeSelection(root) {
     prefix: text.slice(Math.max(0, start - CONTEXT), start),
     suffix: text.slice(end, end + CONTEXT),
     rect: range.getBoundingClientRect(),
+    quoteMd,
   };
 }
 

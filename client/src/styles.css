@@ -814,10 +814,31 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   border-left: 3px solid var(--accent);
   color: var(--muted);
 }
-.md table { border-collapse: collapse; }
+.md table {
+  border-collapse: collapse;
+  /* wide tables scroll in place instead of blowing out a note card */
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
 .md th, .md td {
   border: 1px solid var(--border);
   padding: 4px 9px;
+}
+.md th {
+  background: rgba(127, 127, 127, 0.13);
+  text-align: left;
+}
+.md hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.7em 0;
+}
+/* GFM task lists — hide the bullet, line the checkbox up with the text */
+.md li.task-list-item { list-style: none; margin-left: -1.3em; }
+.md li.task-list-item input[type='checkbox'] {
+  margin-right: 0.45em;
+  vertical-align: -1px;
 }
 .md a { color: var(--accent); }
 /* embedded images (issue #24): scale to the container, stay crisp, and read as

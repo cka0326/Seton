@@ -56,8 +56,11 @@ Stored in `<SETON_DATA_DIR>/seton.db` (SQLite, WAL). Three tables:
     was made so trace mode can stack and number a note's connections in the
     order they were drawn (older edges fall back to array order).
 - **Document** — `{ id, title, content (markdown), highlights[], progress }`.
-  - **Highlight** — `{ id, start, quote, prefix, suffix, color, note, title }`.
+  - **Highlight** — `{ id, start, quote, quoteMd?, prefix, suffix, color, note, title }`.
     Anchored by character offset + surrounding text (see `client/src/lib/anchor.js`).
+    `quoteMd` is the exact markdown source of the selection, stored only when
+    the plain-text `quote` would lose formatting (tables, code fences, lists…);
+    it feeds the canvas note body, never anchoring.
   - **progress** — `{ scroll, percent, lastReadAt, readSeconds }`.
 
 `kind` ∈ note · question · definition · idea · resource. Colors and kinds are
@@ -78,7 +81,7 @@ defined in `client/src/constants.js`.
 | **AddDocModal** | Add a library document by pasting markdown or importing a `.md`/`.txt` file. Paste/drop images to embed them. |
 | **AiToolsModal** | Standalone AI workflows (issue #32): download selected canvases (`seton-canvases/v1`) or a document + annotations (`seton-doc/v1`) with a ready-made prompt for an external assistant, and upload the resulting canvases JSON into the project. Opened from the sidebar "AI tools" button. |
 | **SearchPanel** | Project-wide search UI (project or current-canvas scope); clicking a result jumps to the node/edge/doc. |
-| **Markdown** | Shared `react-markdown` wrapper (GFM + line breaks). Allows `data:` image URLs and renders images lazily. |
+| **Markdown** | Shared `react-markdown` wrapper (GFM + line breaks). Allows `data:` image URLs, renders images lazily, and with the `sourcePos` prop stamps `data-srcpos` source offsets on elements (used by the reader to capture `quoteMd`). |
 | **Icon** | Inline stroke-based SVG icon set (`PATHS` map). Add new glyphs here. |
 | **ThemeToggle** | Light/dark toggle button. |
 
@@ -141,8 +144,11 @@ GET          /api/sync/status                        Drive sync status
 - **Annotation ⇄ note sync.** A note with `data.source` mirrors a highlight.
   Editing the highlight updates the note (`syncAnnotationNodes`, server) and
   editing the note's body/title/color flows back to the highlight
-  (`syncAnnotationsFromCanvas`, server). Rewriting the quoted line detaches the
-  note.
+  (`syncAnnotationsFromCanvas`, server). Rewriting the quoted block detaches
+  the note. The note body quotes `quoteMd || quote` with a `>` marker on every
+  line (tables/code fences survive); the builders in `ProjectView.sendToCanvas`
+  and `server/index.js annotationContent` must stay byte-identical, and the
+  server still accepts the legacy single-`>` form so old notes don't detach.
 - **Images** are embedded as `data:` URLs inside markdown `content`, so they
   need no separate storage and travel through search, export, sync and import
   unchanged (issue #24).

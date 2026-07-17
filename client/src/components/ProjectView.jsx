@@ -264,7 +264,7 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
   // (falling back to the active canvas, then the first one). Notes remember
   // their source annotation, so re-sending updates in place and later
   // annotation edits propagate (see the document PUT handler server-side).
-  const sendToCanvas = useCallback(async ({ quote, note, color, section, title: hlTitle, hlId }) => {
+  const sendToCanvas = useCallback(async ({ quote, quoteMd, note, color, section, title: hlTitle, hlId }) => {
     const p = await api.getProject(projectId);
     const has = (id) => id && p.canvases.some((c) => c.id === id);
     const cid = [p.defaultCanvasId, activeCid, p.canvases[0]?.id].find(has);
@@ -277,9 +277,13 @@ export default function ProjectView({ projectId, theme, onToggleTheme, onClose, 
       hlTitle?.trim() ||
       section?.trim() ||
       words.slice(0, 7).join(' ') + (words.length > 7 ? '…' : '');
-    // the source doc is kept internally (data.source + tag), not in the body
+    // the source doc is kept internally (data.source + tag), not in the body.
+    // quoteMd is the exact markdown source (tables, code fences…); every line
+    // gets a `>` marker so the whole passage stays inside one blockquote.
+    // Must match `annotationContent` in server/index.js byte-for-byte.
     const content =
-      `> ${quote.trim()}` + (note?.trim() ? `\n\n${note.trim()}` : '');
+      (quoteMd || quote).trim().split('\n').map((l) => `> ${l}`.trimEnd()).join('\n') +
+      (note?.trim() ? `\n\n${note.trim()}` : '');
     const name = p.canvases.find((c) => c.id === cid)?.name || 'canvas';
 
     const existing =

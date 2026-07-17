@@ -72,8 +72,13 @@ const docSummary = (d) => ({
 // Body of a canvas note that mirrors an annotation. Must match what the
 // client builds in sendToCanvas so server refreshes are byte-identical.
 // The source document is tracked in data.source, not in the body (issue #22).
+// hl.quoteMd, when present, is the exact markdown source of the highlighted
+// passage; every line gets a `>` marker so tables and code fences survive
+// inside one blockquote.
+const quotedBlock = (text) =>
+  (text || '').trim().split('\n').map((l) => `> ${l}`.trimEnd()).join('\n');
 const annotationContent = (hl) =>
-  `> ${(hl.quote || '').trim()}` +
+  quotedBlock(hl.quoteMd || hl.quote) +
   (hl.note?.trim() ? `\n\n${hl.note.trim()}` : '');
 
 // Keep in sync with HL_TO_NODE_COLOR in client/src/constants.js.
@@ -136,8 +141,11 @@ function syncAnnotationsFromCanvas(pid, canvas) {
     const hl = (doc.highlights || []).find((h) => h.id === src.hlId);
     if (!hl) continue; // highlight deleted — leave the note as it was
     const content = n.data.content || '';
-    const quoteLine = `> ${(hl.quote || '').trim()}`;
-    if (!content.startsWith(quoteLine)) {
+    // current form first, then the legacy single-`>` form so notes created
+    // before multi-line quoting don't detach on their next canvas save
+    const forms = [quotedBlock(hl.quoteMd || hl.quote), `> ${(hl.quote || '').trim()}`];
+    const quoteLine = forms.find((f) => f && content.startsWith(f));
+    if (!quoteLine) {
       delete n.data.source;
       continue;
     }

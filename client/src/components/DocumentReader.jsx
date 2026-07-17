@@ -135,9 +135,10 @@ export default function DocumentReader({
       return next;
     });
   };
-  // memoized so highlight marks aren't disturbed by unrelated re-renders
+  // memoized so highlight marks aren't disturbed by unrelated re-renders;
+  // sourcePos lets a selection map back to the exact markdown source
   const body = useMemo(
-    () => <Markdown className="reader-md">{doc?.content || ''}</Markdown>,
+    () => <Markdown className="reader-md" sourcePos>{doc?.content || ''}</Markdown>,
     [doc?.content]
   );
 
@@ -179,13 +180,25 @@ export default function DocumentReader({
   }, [doc, initialScrollTop, focusHlId, scrollPosRef]);
 
   const hlTimer = useRef(null);
+  const pendingHls = useRef(null);
+  // `next` is the new list or an updater fn. Callers must use the fn form when
+  // they might run in the same tick as another change (the "highlight and
+  // send" flow adds a highlight and retitles it before React re-renders — a
+  // plain array from the `doc` closure would drop the fresh highlight).
   const saveHighlights = useCallback(
     (next) => {
-      setDoc((d) => (d ? { ...d, highlights: next } : d));
+      setDoc((d) => {
+        if (!d) return d;
+        const highlights =
+          typeof next === 'function' ? next(d.highlights || []) : next;
+        pendingHls.current = highlights;
+        return { ...d, highlights };
+      });
       clearTimeout(hlTimer.current);
       hlTimer.current = setTimeout(() => {
+        if (!pendingHls.current) return;
         api
-          .saveDoc(projectId, docId, { highlights: next })
+          .saveDoc(projectId, docId, { highlights: pendingHls.current })
           .then(() => onMetaChange?.())
           .catch((e) => setError(`Save failed: ${e.message}`));
       }, 400);
@@ -363,12 +376,12 @@ export default function DocumentReader({
     requestAnimationFrame(() => {
       const root = contentRef.current;
       if (!root) return;
-      const sel = describeSelection(root);
+      const sel = describeSelection(root, doc?.content);
       if (sel && sel.quote.trim()) {
         setPopover({ mode: 'new', sel, ...popoverPosition(sel.rect) });
       }
     });
-  }, []);
+  }, [doc?.content]);
 
   const onContentClick = useCallback((e) => {
     const mark = e.target.closest?.('mark[data-hl]');
@@ -413,13 +426,17 @@ export default function DocumentReader({
       id: newId('h'),
       start: sel.start,
       quote: sel.quote,
+      // exact markdown source of the selection, kept only when the plain
+      // quote would lose formatting (tables, code, lists, bold…) — used for
+      // the canvas note body, never for anchoring
+      ...(sel.quoteMd ? { quoteMd: sel.quoteMd } : {}),
       prefix: sel.prefix,
       suffix: sel.suffix,
       color,
       note: '',
       createdAt: Date.now(),
     };
-    saveHighlights([...(doc.highlights || []), hl]);
+    saveHighlights((hls) => [...hls, hl]);
     window.getSelection()?.removeAllRanges();
     if (openNote) {
       setPopover((p) => ({ ...p, mode: 'edit', hlId: hl.id, sel: null }));
@@ -430,13 +447,11 @@ export default function DocumentReader({
   };
 
   const updateHl = (id, patch) => {
-    saveHighlights(
-      (doc.highlights || []).map((h) => (h.id === id ? { ...h, ...patch } : h))
-    );
+    saveHighlights((hls) => hls.map((h) => (h.id === id ? { ...h, ...patch } : h)));
   };
 
   const removeHl = (id) => {
-    saveHighlights((doc.highlights || []).filter((h) => h.id !== id));
+    saveHighlights((hls) => hls.filter((h) => h.id !== id));
     setPopover(null);
     setSelHlId((s) => (s === id ? null : s));
   };
@@ -468,7 +483,14 @@ export default function DocumentReader({
       sectionForHl(hl) ||
       words.slice(0, 7).join(' ') + (words.length > 7 ? '…' : '');
     if (title !== (hl.title || '')) updateHl(hl.id, { title });
-    return { quote: hl.quote, note: hl.note, color: hl.color, title, hlId: hl.id };
+    return {
+      quote: hl.quote,
+      quoteMd: hl.quoteMd,
+      note: hl.note,
+      color: hl.color,
+      title,
+      hlId: hl.id,
+    };
   };
 
   const sendHl = async (hl) => {
