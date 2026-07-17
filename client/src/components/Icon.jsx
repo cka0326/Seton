@@ -20,6 +20,20 @@ const PATHS = {
   pencil: (
     <path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Zm-2 4 2 2" />
   ),
+  copy: (
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+    </>
+  ),
+  network: (
+    <>
+      <circle cx="5" cy="5" r="2.6" />
+      <circle cx="5" cy="19" r="2.6" />
+      <circle cx="19" cy="12" r="2.6" />
+      <path d="m7.4 6.2 9.2 4.6M7.4 17.8l9.2-4.6" />
+    </>
+  ),
   download: <path d="M12 3v12m0 0 5-5m-5 5-5-5M4 21h16" />,
   upload: <path d="M12 15V3m0 0 5 5m-5-5-5 5M4 21h16" />,
   back: <path d="m15 18-6-6 6-6" />,

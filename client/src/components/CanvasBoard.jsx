@@ -102,6 +102,43 @@ function retargetEdges(nodes, edges) {
   });
 }
 
+// Everything needed to fully understand `focusId` (deep trace): every note it
+// feeds, transitively — and every note feeding any of those, transitively. So
+// a downstream synthesis note pulls in its *other* sources too, which a
+// direct-neighbor trace misses. Siblings' unrelated branches stay out:
+// descendants of ancestors are not followed.
+function contextClosure(focusId, edges) {
+  const out = new Map();
+  const inn = new Map();
+  for (const e of edges) {
+    if (e.source === e.target) continue;
+    if (!out.has(e.source)) out.set(e.source, []);
+    out.get(e.source).push(e.target);
+    if (!inn.has(e.target)) inn.set(e.target, []);
+    inn.get(e.target).push(e.source);
+  }
+  const all = new Set([focusId]);
+  const down = [focusId];
+  while (down.length) {
+    for (const t of out.get(down.pop()) || []) {
+      if (!all.has(t)) {
+        all.add(t);
+        down.push(t);
+      }
+    }
+  }
+  const up = [...all];
+  while (up.length) {
+    for (const s of inn.get(up.pop()) || []) {
+      if (!all.has(s)) {
+        all.add(s);
+        up.push(s);
+      }
+    }
+  }
+  return all;
+}
+
 // Rough on-screen size of a wrapped edge label — matches the .edge-label rule
 // in styles.css (11px text, ~200px max content width). Fed to dagre so the
 // layout reserves room for the label instead of letting it overlap nodes.
@@ -249,6 +286,10 @@ function Board({
   const [recall, setRecall] = useState(false);
   const [filter, setFilter] = useState('');
   const [saveState, setSaveState] = useState('saved'); // saved | dirty | saving | error
+  const [menu, setMenu] = useState(null); // { nodeId, x, y } — node context menu
+  const menuRef = useRef(null);
+  menuRef.current = menu;
+  const boardRef = useRef(null);
   const rf = useReactFlow();
   const store = useStoreApi();
   const filterRef = useRef(null);
@@ -500,8 +541,12 @@ function Board({
   // number badge showing connection order. All of it is display-only — real
   // positions and handles are restored on exit. Clicking a neighbor re-traces
   // from there (see onNodeClick).
+  //
+  // With `deep`, the view widens from direct connections to the full context
+  // closure (contextClosure) and lays it out as a left→right hierarchy, so a
+  // downstream note's other feeders show up alongside it.
   const traceFocus = useCallback(
-    (focusId) => {
+    (focusId, deep = false) => {
       captureOnce();
       const ns = latest.current.nodes;
       const byId = new Map(ns.map((n) => [n.id, n]));
@@ -576,8 +621,32 @@ function Board({
         });
         return pos;
       };
-      const placed = new Map([...place(incoming, 'left'), ...place(outgoing, 'right')]);
-      placed.set(focusId, anchor);
+      let placed;
+      if (deep) {
+        // full-context closure, laid out left→right by dagre (real positions
+        // as the starting point, so unconnected clusters keep their shape)
+        const ids = contextClosure(focusId, latest.current.edges);
+        const subset = ns
+          .filter((n) => ids.has(n.id))
+          .map((n) => ({
+            ...n,
+            position: tempSaved.current.get(n.id) || n.position,
+          }));
+        const subEdges = latest.current.edges.filter(
+          (e) => ids.has(e.source) && ids.has(e.target)
+        );
+        const laid = layoutNodes(subset, subEdges, 'LR');
+        // keep the focus card where it really sits so the view doesn't jump
+        const laidFocus = laid.find((n) => n.id === focusId);
+        const dx = anchor.x - laidFocus.position.x;
+        const dy = anchor.y - laidFocus.position.y;
+        placed = new Map(
+          laid.map((n) => [n.id, { x: n.position.x + dx, y: n.position.y + dy }])
+        );
+      } else {
+        placed = new Map([...place(incoming, 'left'), ...place(outgoing, 'right')]);
+        placed.set(focusId, anchor);
+      }
 
       // Re-anchor visible edges to the sides facing each other in the trace
       // layout (real handles are captured once and restored on exit), and
@@ -636,17 +705,28 @@ function Board({
     [captureOnce, rf]
   );
 
-  const enterTrace = useCallback(() => {
+  const enterTrace = useCallback((deep = false) => {
     setFilter('');
     const start = selNodeIdRef.current;
-    setTrace({ focusId: start || null });
+    setTrace({ focusId: start || null, deep });
     if (start) {
       filterViewRef.current = false; // trace takes over any filter capture
-      traceFocus(start);
+      traceFocus(start, deep);
     } else if (filterViewRef.current) {
       restoreLayout(); // waiting for a click — show the real canvas
     }
   }, [traceFocus, restoreLayout]);
+
+  // Trace a specific note (context menu) — no prior selection needed.
+  const traceFrom = useCallback(
+    (id, deep = false) => {
+      setFilter('');
+      filterViewRef.current = false;
+      setTrace({ focusId: id, deep });
+      traceFocus(id, deep);
+    },
+    [traceFocus]
+  );
 
   const exitTrace = useCallback(() => {
     setTrace(null);
@@ -824,10 +904,11 @@ function Board({
     [rf, addNoteAt]
   );
 
-  // Duplicate the selected note(s) with a small offset (Ctrl/Cmd+D). Copies of
-  // grouped notes form their own new group(s) instead of joining the original.
-  const duplicateSelection = useCallback(() => {
-    const ids = new Set(selectedRef.current.nodes);
+  // Duplicate the given note ids — or the selection (Ctrl/Cmd+D) — with a
+  // small offset. Copies of grouped notes form their own new group(s) instead
+  // of joining the original.
+  const duplicateSelection = useCallback((idsArg) => {
+    const ids = new Set(Array.isArray(idsArg) ? idsArg : selectedRef.current.nodes);
     if (!ids.size) return;
     const gmap = new Map();
     const mapGroup = (g) => {
@@ -985,6 +1066,10 @@ function Board({
         el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
 
       if (e.key === 'Escape') {
+        if (menuRef.current) {
+          setMenu(null);
+          return;
+        }
         if (typing) {
           el.blur();
           return;
@@ -994,7 +1079,7 @@ function Board({
         if (traceRef.current) {
           if (traceRef.current.focusId) {
             // step 1: leave the traced node, stay armed for the next click
-            setTrace({ focusId: null });
+            setTrace({ focusId: null, deep: traceRef.current.deep });
             restoreLayout();
           } else {
             // step 2: leave trace mode entirely
@@ -1018,7 +1103,7 @@ function Board({
           setNodes((ns) => ns.filter((n) => !selNodes.has(n.id)));
           if (traceRef.current?.focusId && selNodes.has(traceRef.current.focusId)) {
             // the traced node is gone — fall back to the full canvas
-            setTrace({ focusId: null });
+            setTrace({ focusId: null, deep: traceRef.current.deep });
             restoreLayout();
           }
         }
@@ -1062,6 +1147,10 @@ function Board({
       } else if (e.key === 't') {
         if (traceRef.current) exitTrace();
         else enterTrace();
+      } else if (e.key === 'T') {
+        // shift+T: deep trace — the full context of the selected note
+        if (traceRef.current) exitTrace();
+        else enterTrace(true);
       } else if (e.key === 'l') {
         linkSelection();
       } else if (e.key === 'e' || e.key === 'Enter') {
@@ -1161,6 +1250,16 @@ function Board({
     setEdges((es) => es.filter((e) => e.id !== id));
   }, []);
 
+  // the node context menu closes on any press outside it
+  useEffect(() => {
+    if (!menu) return;
+    const onDown = (e) => {
+      if (!e.target.closest?.('.node-menu')) setMenu(null);
+    };
+    window.addEventListener('mousedown', onDown, true);
+    return () => window.removeEventListener('mousedown', onDown, true);
+  }, [menu]);
+
   const q = filter.trim().toLowerCase();
 
   // filter → temporary results view (debounced so it doesn't thrash per key)
@@ -1187,6 +1286,7 @@ function Board({
   const selNode = selNodeId ? nodes.find((n) => n.id === selNodeId) : null;
   const selEdge = !selNode && selEdgeId ? edges.find((e) => e.id === selEdgeId) : null;
   const maxNode = maxNodeId ? nodes.find((n) => n.id === maxNodeId) : null;
+  const menuNode = menu ? nodes.find((n) => n.id === menu.nodeId) : null;
 
   const edgeEndpoints = useMemo(() => {
     if (!selEdge) return null;
@@ -1204,6 +1304,7 @@ function Board({
       <NodeSizeContext.Provider value={updateNodeDims}>
       <FitAllContext.Provider value={fitSignal}>
       <div
+        ref={boardRef}
         className={`board ${recall ? 'recall-mode' : ''}`}
         onDrop={onBoardDrop}
         onDragOver={onBoardDragOver}
@@ -1275,7 +1376,7 @@ function Board({
           <button
             className={`ghost ${trace ? 'active' : ''}`}
             onClick={() => (trace ? exitTrace() : enterTrace())}
-            title="Trace mode: click a note to see just its connections, laid out around it (t)"
+            title="Trace mode: click a note to see just its connections, laid out around it (t). Right-click a note for a full-context trace (⇧T)"
           >
             <Icon name="route" /><span className="btn-label"> Trace</span>
           </button>
@@ -1334,14 +1435,35 @@ function Board({
           onConnect={onConnect}
           onSelectionChange={onSelectionChange}
           onNodeClick={(e, node) => {
+            setMenu(null);
             // plain click walks the trace; modified clicks keep multi-select
             if (e.shiftKey || e.metaKey || e.ctrlKey) return;
             if (traceRef.current && traceRef.current.focusId !== node.id) {
-              setTrace({ focusId: node.id });
-              traceFocus(node.id);
+              const deep = traceRef.current.deep;
+              setTrace({ focusId: node.id, deep });
+              traceFocus(node.id, deep);
             }
           }}
           onNodeDoubleClick={(_e, node) => setMaxNodeId(node.id)}
+          onNodeContextMenu={(e, node) => {
+            e.preventDefault();
+            // right-click selects the note it hit (keeps a multi-selection)
+            if (!node.selected) {
+              setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === node.id })));
+            }
+            const rect = boardRef.current?.getBoundingClientRect();
+            const x = e.clientX - (rect?.left ?? 0);
+            const y = e.clientY - (rect?.top ?? 0);
+            setMenu({
+              nodeId: node.id,
+              x: Math.max(8, Math.min(x, (rect?.width ?? x + 1) - 240)),
+              y: Math.max(8, Math.min(y, (rect?.height ?? y + 1) - 240)),
+            });
+          }}
+          onPaneContextMenu={(e) => {
+            e.preventDefault();
+            setMenu(null);
+          }}
           onNodeDragStart={onNodeDragStart}
           onNodeDrag={onNodeDrag}
           onNodeDragStop={(_e, _node, dragged) => {
@@ -1354,7 +1476,10 @@ function Board({
           }}
           onPaneClick={onPaneClick}
           onInit={onInit}
-          onMove={onMove}
+          onMove={(e, vp) => {
+            setMenu(null); // pan/zoom would leave the menu floating off-node
+            onMove(e, vp);
+          }}
           connectionMode={ConnectionMode.Loose}
           connectionRadius={40}
           elevateEdgesOnSelect
@@ -1385,18 +1510,81 @@ function Board({
 
         {trace && (
           <div className="trace-banner">
-            <Icon name="route" size={13} />
+            <Icon name={trace.deep ? 'network' : 'route'} size={13} />
             {trace.focusId ? (
               <span>
-                Tracing{' '}
+                Tracing {trace.deep ? 'full context of ' : ''}
                 <strong>
                   {nodes.find((n) => n.id === trace.focusId)?.data?.title || 'note'}
                 </strong>
-                {' '}— in on the left, out on the right, numbered in connection order · click a note to walk · Esc to step back
+                {trace.deep
+                  ? ' — everything it feeds, plus every note feeding those · click a note to walk · Esc to step back'
+                  : ' — in on the left, out on the right, numbered in connection order · click a note to walk · Esc to step back'}
               </span>
             ) : (
-              <span>Trace mode — click a note to see its connections · Esc to exit</span>
+              <span>
+                Trace mode — click a note to see its{' '}
+                {trace.deep ? 'full context' : 'connections'} · Esc to exit
+              </span>
             )}
+          </div>
+        )}
+
+        {menu && menuNode && (
+          <div className="node-menu" style={{ left: menu.x, top: menu.y }}>
+            <div className="node-menu-title">{menuNode.data?.title || 'Untitled'}</div>
+            <button
+              onClick={() => {
+                setMenu(null);
+                setMaxNodeId(menu.nodeId);
+              }}
+            >
+              <Icon name="pencil" size={13} /> Edit note<kbd>e</kbd>
+            </button>
+            {!trace && !q && (
+              <button
+                onClick={() => {
+                  setMenu(null);
+                  duplicateSelection([menu.nodeId]);
+                }}
+              >
+                <Icon name="copy" size={13} /> Duplicate<kbd>⌘D</kbd>
+              </button>
+            )}
+            <div className="node-menu-sep" />
+            <button
+              title="Show just this note and its direct connections"
+              onClick={() => {
+                setMenu(null);
+                traceFrom(menu.nodeId, false);
+              }}
+            >
+              <Icon name="route" size={13} /> Trace connections<kbd>t</kbd>
+            </button>
+            <button
+              title="Show everything this note feeds, plus every note feeding those — the full picture, including a downstream note's other sources"
+              onClick={() => {
+                setMenu(null);
+                traceFrom(menu.nodeId, true);
+              }}
+            >
+              <Icon name="network" size={13} /> Trace full context<kbd>⇧T</kbd>
+            </button>
+            <div className="node-menu-sep" />
+            <button
+              className="danger"
+              onClick={() => {
+                const id = menu.nodeId;
+                setMenu(null);
+                if (traceRef.current?.focusId === id) {
+                  setTrace({ focusId: null, deep: traceRef.current.deep });
+                  restoreLayout();
+                }
+                deleteNode(id);
+              }}
+            >
+              <Icon name="trash" size={13} /> Delete note<kbd>⌫</kbd>
+            </button>
           </div>
         )}
 
