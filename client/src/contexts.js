@@ -15,3 +15,7 @@ export const NodeSizeContext = createContext(null);
 // Broadcast from the board's "Fit" button: every mounted note auto-fits to its
 // content when the timestamp changes. Value: { ts } | null.
 export const FitAllContext = createContext(null);
+
+// Auto-computed outline numbers for edges (Map<edgeId, '1.2.3'>) — derived
+// from the graph in CanvasBoard, rendered as badges by NoteEdge.
+export const EdgeNumContext = createContext(null);

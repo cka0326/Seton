@@ -17,12 +17,11 @@ import {
 import dagre from '@dagrejs/dagre';
 import NoteNode from './NoteNode.jsx';
 import NoteEdge from './NoteEdge.jsx';
-import Inspector from './Inspector.jsx';
 import NoteModal from './NoteModal.jsx';
 import Icon from './Icon.jsx';
 import { api } from '../api.js';
 import { DEFAULT_NODE, KINDS, NODE_COLORS } from '../constants.js';
-import { FitAllContext, NodeSizeContext, OpenSourceContext, RecallContext } from '../contexts.js';
+import { EdgeNumContext, FitAllContext, NodeSizeContext, OpenSourceContext, RecallContext } from '../contexts.js';
 import { fileToImage, imageFilesFromEvent, imageMarkdown } from '../lib/image.js';
 
 const nodeTypes = { note: NoteNode };
@@ -139,25 +138,58 @@ function contextClosure(focusId, edges) {
   return all;
 }
 
-// Rough on-screen size of a wrapped edge label — matches the .edge-label rule
-// in styles.css (11px text, ~200px max content width). Fed to dagre so the
-// layout reserves room for the label instead of letting it overlap nodes.
-const LABEL_MAX_W = 200; // max content width before wrapping
-const LABEL_CHAR_W = 6.1; // ~avg glyph advance at 11px
-const LABEL_LINE_H = 16; // line box height (11px × 1.35)
-const LABEL_PAD_X = 20; // horizontal padding + border
-const LABEL_PAD_Y = 8; // vertical padding + border
+// Outline numbers for every edge, from the graph itself: the k-th edge out of
+// a root note is `k` (a shared counter across roots), and the k-th edge out of
+// a note reached by edge `1.2` is `1.2.k` — 1, 1.1, 1.2, 1.1.1, 2, 2.1 …
+// Roots are notes with no incoming edge; sibling order is connection order
+// (data.createdAt, else array position). A note's number is the edge that
+// first reached it; extra edges into an already-numbered note still get their
+// own number under their source. Cycle-only clusters get a fresh top number.
+function edgeNumbers(nodes, edges) {
+  const ids = new Set(nodes.map((n) => n.id));
+  const out = new Map(nodes.map((n) => [n.id, []]));
+  const inDeg = new Map(nodes.map((n) => [n.id, 0]));
+  edges.forEach((e, i) => {
+    if (!ids.has(e.source) || !ids.has(e.target) || e.source === e.target) return;
+    out.get(e.source).push({ e, ord: e.data?.createdAt ?? i });
+    inDeg.set(e.target, inDeg.get(e.target) + 1);
+  });
+  for (const l of out.values()) l.sort((a, b) => a.ord - b.ord);
 
-function estimateLabelSize(label) {
-  const text = (label || '').trim();
-  if (!text) return null;
-  const contentPx = text.length * LABEL_CHAR_W;
-  const contentW = Math.min(LABEL_MAX_W, contentPx);
-  const lines = Math.max(1, Math.ceil(contentPx / contentW));
-  return {
-    width: Math.round(contentW + LABEL_PAD_X),
-    height: Math.round(lines * LABEL_LINE_H + LABEL_PAD_Y),
+  const labels = new Map(); // edge id → '1.2.3'
+  const nodeNum = new Map(); // node id → '' (root) | '1.2'
+  let top = 0;
+  const visit = (rootId) => {
+    const q = [rootId];
+    while (q.length) {
+      const cur = q.shift();
+      const base = nodeNum.get(cur);
+      let k = 0;
+      for (const { e } of out.get(cur)) {
+        if (labels.has(e.id)) continue;
+        const num = base ? `${base}.${++k}` : String(++top);
+        labels.set(e.id, num);
+        if (!nodeNum.has(e.target)) {
+          nodeNum.set(e.target, num);
+          q.push(e.target);
+        }
+      }
+    }
   };
+  for (const n of nodes) {
+    if (!nodeNum.has(n.id) && inDeg.get(n.id) === 0 && out.get(n.id).length) {
+      nodeNum.set(n.id, '');
+      visit(n.id);
+    }
+  }
+  // whatever is left unreachable from any root can only be cycles
+  for (const n of nodes) {
+    if (!nodeNum.has(n.id) && out.get(n.id).some(({ e }) => !labels.has(e.id))) {
+      nodeNum.set(n.id, '');
+      visit(n.id);
+    }
+  }
+  return labels;
 }
 
 // Hierarchical auto-layout using dagre. Returns nodes with new positions.
@@ -173,10 +205,7 @@ function layoutNodes(nodes, edges, direction = 'TB') {
   }
   for (const e of edges) {
     if (!g.hasNode(e.source) || !g.hasNode(e.target)) continue;
-    // give dagre the label's footprint (centered on the edge) so it spaces the
-    // ranks/columns wide enough for the whole label to sit clear of the nodes
-    const size = estimateLabelSize(e.data?.label);
-    g.setEdge(e.source, e.target, size ? { ...size, labelpos: 'c' } : {});
+    g.setEdge(e.source, e.target, {});
   }
   dagre.layout(g);
   return nodes.map((n) => {
@@ -440,7 +469,6 @@ function Board({
   const [nodes, setNodes] = useState(doc.nodes || []);
   const [edges, setEdges] = useState(doc.edges || []);
   const [selNodeId, setSelNodeId] = useState(null);
-  const [selEdgeId, setSelEdgeId] = useState(null);
   const [maxNodeId, setMaxNodeId] = useState(null);
   const [recall, setRecall] = useState(false);
   const [filter, setFilter] = useState('');
@@ -456,8 +484,6 @@ function Board({
   // refs so the global key handler reads current selection without re-binding
   const selNodeIdRef = useRef(null);
   selNodeIdRef.current = selNodeId;
-  const selEdgeIdRef = useRef(null);
-  selEdgeIdRef.current = selEdgeId;
   const maxNodeIdRef = useRef(null);
   maxNodeIdRef.current = maxNodeId;
 
@@ -560,7 +586,7 @@ function Board({
         addEdge(
           // createdAt records connection order, so trace mode can number and
           // stack a node's connections in the order they were made
-          { ...params, id: newId('e'), type: 'note', data: { label: '', createdAt: Date.now() } },
+          { ...params, id: newId('e'), type: 'note', data: { createdAt: Date.now() } },
           es
         )
       ),
@@ -580,7 +606,6 @@ function Board({
     const ordered = kept.concat(sn.map((n) => n.id).filter((id) => !keptSet.has(id)));
     selectedRef.current = { nodes: ordered, edges: se.map((e) => e.id) };
     setSelNodeId(sn[0]?.id || null);
-    setSelEdgeId(se[0]?.id || null);
     setSelCount(sn.length);
 
     // Grouped notes select as one (PowerPoint-style): selecting any member
@@ -1123,7 +1148,7 @@ function Board({
           sourceHandle: sh,
           targetHandle: th,
           type: 'note',
-          data: { label: '', createdAt: Date.now() },
+          data: { createdAt: Date.now() },
         });
       }
       return added.length ? es.concat(added) : es;
@@ -1416,19 +1441,9 @@ function Board({
     );
   }, []);
 
-  const updateEdgeData = useCallback((id, patch) => {
-    setEdges((es) =>
-      es.map((e) => (e.id === id ? { ...e, data: { ...e.data, ...patch } } : e))
-    );
-  }, []);
-
   const deleteNode = useCallback((id) => {
     setNodes((ns) => ns.filter((n) => n.id !== id));
     setEdges((es) => es.filter((e) => e.source !== id && e.target !== id));
-  }, []);
-
-  const deleteEdge = useCallback((id) => {
-    setEdges((es) => es.filter((e) => e.id !== id));
   }, []);
 
   // the node context menu closes on any press outside it
@@ -1465,25 +1480,19 @@ function Board({
     new Set(selectedNodes.map((n) => n.data.group)).size === 1;
 
   const selNode = selNodeId ? nodes.find((n) => n.id === selNodeId) : null;
-  const selEdge = !selNode && selEdgeId ? edges.find((e) => e.id === selEdgeId) : null;
   const maxNode = maxNodeId ? nodes.find((n) => n.id === maxNodeId) : null;
   const menuNode = menu ? nodes.find((n) => n.id === menu.nodeId) : null;
 
-  const edgeEndpoints = useMemo(() => {
-    if (!selEdge) return null;
-    const s = nodes.find((n) => n.id === selEdge.source);
-    const t = nodes.find((n) => n.id === selEdge.target);
-    return {
-      source: s?.data?.title || 'Untitled',
-      target: t?.data?.title || 'Untitled',
-    };
-  }, [selEdge, nodes]);
+  // outline numbers, recomputed whenever the graph changes and rendered as
+  // badges by NoteEdge (labels are display-only, never persisted)
+  const edgeNums = useMemo(() => edgeNumbers(nodes, edges), [nodes, edges]);
 
   return (
     <RecallContext.Provider value={recall}>
       <OpenSourceContext.Provider value={onOpenSource || null}>
       <NodeSizeContext.Provider value={updateNodeDims}>
       <FitAllContext.Provider value={fitSignal}>
+      <EdgeNumContext.Provider value={edgeNums}>
       <div
         ref={boardRef}
         className={`board ${recall ? 'recall-mode' : ''}`}
@@ -1776,15 +1785,6 @@ function Board({
           </div>
         )}
 
-        {selEdge && (
-          <Inspector
-            edge={selEdge}
-            edgeEndpoints={edgeEndpoints}
-            onChangeData={(patch) => updateEdgeData(selEdge.id, patch)}
-            onDelete={() => deleteEdge(selEdge.id)}
-          />
-        )}
-
         {maxNode && (
           <NoteModal
             node={maxNode}
@@ -1795,6 +1795,7 @@ function Board({
           />
         )}
       </div>
+      </EdgeNumContext.Provider>
       </FitAllContext.Provider>
       </NodeSizeContext.Provider>
       </OpenSourceContext.Provider>

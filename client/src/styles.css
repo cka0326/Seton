@@ -794,18 +794,19 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   opacity: 1;
 }
 
-/* edge label — wraps to show the whole note instead of truncating (a rounded
-   box rather than a pill, since multi-line labels read better boxed) */
-/* positions the label + trace-order badge together at the edge midpoint */
+/* edge number badge at the edge midpoint. NoteEdge scales it against the
+   viewport zoom (transform-origin 0 0 keeps it centered while scaling), and
+   the renderer layer is lifted above nodes so badges are never buried. */
+.react-flow__edgelabel-renderer { z-index: 1001; }
 .edge-label-stack {
   position: absolute;
+  transform-origin: 0 0;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
   pointer-events: none;
 }
-/* trace mode: connection-order badge (1 = connected first) */
+/* outline number (1, 1.2, 2.1.3 …) — same pill as the trace-order badge */
 .edge-order {
   display: inline-flex;
   align-items: center;
@@ -820,22 +821,6 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   font-weight: 700;
   box-shadow: 0 1px 4px rgba(9, 14, 24, 0.35);
 }
-.edge-label {
-  background: var(--bg-3);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 10px;
-  font-size: 11px;
-  line-height: 1.35;
-  padding: 3px 9px;
-  max-width: 200px;
-  white-space: normal;
-  overflow-wrap: break-word;
-  word-break: break-word;
-  text-align: center;
-  pointer-events: all;
-}
-.edge-label.selected { border-color: var(--accent); }
 
 /* ---------- markdown ---------- */
 
@@ -904,31 +889,8 @@ h2.project-name .inline-rename, .project-name .inline-rename { font-weight: 600;
   border-radius: 8px;
 }
 
-/* ---------- inspector ---------- */
+/* ---------- shared form fields (NoteModal) ---------- */
 
-.inspector {
-  position: absolute;
-  z-index: 10;
-  top: 64px;
-  right: 10px;
-  bottom: 10px;
-  width: 290px;
-  background: color-mix(in srgb, var(--bg-2) 94%, transparent);
-  backdrop-filter: blur(6px);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 14px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.inspector-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 6px;
-}
 .field { display: block; }
 .field-label {
   display: block;

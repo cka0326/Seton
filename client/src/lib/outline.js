@@ -125,7 +125,7 @@ export function outlineCanvas(doc, tag) {
       sourceHandle: 'b',
       targetHandle: 'l',
       type: 'note',
-      data: { label: '', createdAt: now + i },
+      data: { createdAt: now + i },
     }));
   return { nodes, edges };
 }
